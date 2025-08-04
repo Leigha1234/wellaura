@@ -1,6 +1,15 @@
-import { Stack } from "expo-router";
-//import "./global.css";
+import { Stack } from 'expo-router';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { WellauraProvider } from './WellauraContext';
 
 export default function RootLayout() {
-  return <Stack />;
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <WellauraProvider>
+        <Stack>
+          <Stack.Screen name="(root)" options={{ headerShown: false }} />
+        </Stack>
+      </WellauraProvider>
+    </GestureHandlerRootView>
+  );
 }

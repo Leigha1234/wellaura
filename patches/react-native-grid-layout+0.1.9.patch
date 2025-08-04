@@ -1,0 +1,76 @@
+diff --git a/node_modules/react-native-grid-layout/Utils/computeProps.js b/node_modules/react-native-grid-layout/Utils/computeProps.js
+index 0da7291..0ca0b38 100644
+--- a/node_modules/react-native-grid-layout/Utils/computeProps.js
++++ b/node_modules/react-native-grid-layout/Utils/computeProps.js
+@@ -1,10 +1,11 @@
+ var React = require('react');
+-import ReactNativePropRegistry from 'react-native/Libraries/Renderer/src/renderers/native/ReactNativePropRegistry';
++// The broken import is removed and replaced with the official StyleSheet module.
++import { StyleSheet } from 'react-native';
+ var _ = require('lodash');
+ 
+ module.exports = function(incomingProps, defaultProps) {
+ 
+-    // External props has a higher precedence
++    // External props have a higher precedence
+     var computedProps = {};
+ 
+     incomingProps = _.clone(incomingProps);
+@@ -13,44 +14,23 @@ module.exports = function(incomingProps, defaultProps) {
+     var incomingPropsStyle = incomingProps.style;
+     delete incomingProps.style;
+ 
+-    // console.log(defaultProps, incomingProps);
+-
+     if(incomingProps)
+         _.merge(computedProps, defaultProps, incomingProps);
+     else
+         computedProps = defaultProps;
+ 
+-    // Pass the merged Style Object instead
+-    if(incomingPropsStyle) {
+-
+-        var computedPropsStyle = {};
+-        computedProps.style = {};
+-        if (Array.isArray(incomingPropsStyle)) {
+-            _.forEach(incomingPropsStyle, (style)=>{
+-                if(typeof style == 'number') {
+-                    _.merge(computedPropsStyle, ReactNativePropRegistry.getByID(style));
+-                } else {
+-                    _.merge(computedPropsStyle, style);
+-                }
+-            })
+-
+-        }
+-        else {
+-            if(typeof incomingPropsStyle == 'number') {
+-                computedPropsStyle = ReactNativePropRegistry.getByID(incomingPropsStyle);
+-            } else {
+-                computedPropsStyle = incomingPropsStyle;
+-            }
+-        }
+-
+-        _.merge(computedProps.style, defaultProps.style, computedPropsStyle);
+-
+-
++    // --- REVISED STYLE LOGIC ---
++    // The complex, broken logic is replaced with this much simpler block.
++    // StyleSheet.flatten correctly handles arrays, registered stylesheet IDs (numbers), and plain objects.
++    if (incomingPropsStyle) {
++        const flattenedIncomingStyle = StyleSheet.flatten(incomingPropsStyle);
++        // We combine the default style with the incoming style.
++        // The style on the right (flattenedIncomingStyle) will override the one on the left.
++        computedProps.style = [defaultProps.style, flattenedIncomingStyle];
++    } else {
++        // If no incoming style is provided, just use the default.
++        computedProps.style = defaultProps.style;
+     }
+ 
+-    // console.log("computedProps ", computedProps);
+-
+     return computedProps;
+-
+-
+-}
++};
+\ No newline at end of file

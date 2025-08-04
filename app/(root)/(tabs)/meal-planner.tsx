@@ -1,0 +1,286 @@
+import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from '@react-native-community/datetimepicker';
+import moment from "moment";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    ScrollView,
+    Share,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { fetchMealOptions } from '../../../lib/mealApi';
+import { Meal, MealPlan } from "../../types";
+import { useWellaura } from "../../WellauraContext";
+
+// --- CONSTANTS ---
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const initialNewMealState = { name: "", type: 'breakfast' as Meal['type'], ingredients: "", nutrition: { calories: "", protein: "", carbs: "", fat: "" }, recipe: "" };
+const mealTypes = { breakfast: { icon: "cafe-outline" as const }, lunch: { icon: "restaurant-outline" as const }, dinner: { icon: "moon-outline" as const }, snack: { icon: "pizza-outline" as const }, };
+const preferenceOptions = ["vegetarian", "vegan", "gluten-free"];
+
+// --- SIMULATED AI NUTRITION API ---
+const parseAndFetchNutrition = async (text: string): Promise<Omit<Meal, 'type' | 'tags'>> => { console.log(`Parsing: "${text}"`); await new Promise(resolve => setTimeout(resolve, 1500)); let calories = 0, protein = 0, carbs = 0, fat = 0; const lowerText = text.toLowerCase(); const sliceMatch = lowerText.match(/(\d+|one|two|three)\s*slice/); let sliceMultiplier = 1; if (sliceMatch) { const countStr = sliceMatch[1]; if (countStr === 'one') sliceMultiplier = 1; else if (countStr === 'two') sliceMultiplier = 2; else if (countStr === 'three') sliceMultiplier = 3; else if (!isNaN(parseInt(countStr))) sliceMultiplier = parseInt(countStr); } if (lowerText.includes('toast') || lowerText.includes('bread')) { calories += 80 * sliceMultiplier; carbs += 15 * sliceMultiplier; } if (lowerText.includes('nutella')) { calories += 200; carbs += 22; fat += 12; protein += 2; } if (lowerText.includes('chicken')) { calories += 250; protein += 40; fat += 8; } if (lowerText.includes('beef')) { calories += 300; protein += 35; fat += 18; } if (lowerText.includes('rice')) { calories += 200; carbs += 45; } if (lowerText.includes('pasta')) { calories += 220; carbs += 43; } if (lowerText.includes('sauce')) { calories += 100; carbs += 15; fat += 3; } if (lowerText.includes('egg')) { const count = text.match(/(\d+)\s*egg/)?.[1] || 1; calories += 75 * Number(count); protein += 6 * Number(count); fat += 5 * Number(count); } if (lowerText.includes('butter')) { calories += 50; fat += 6; } if (lowerText.includes('salad')) { calories += 150; carbs += 10; fat += 10; } if (lowerText.includes('apple')) { calories += 95; carbs += 25; } if (lowerText.includes('protein shake')) { calories += 180; protein += 30; carbs += 5; } if (calories === 0) { calories = 250; protein = 10; carbs = 20; fat = 10; } const ingredients = text.split(/,|\sand|with/).map(i => i.trim()).filter(Boolean); const name = text.split(' ').slice(0, 4).join(' '); return { name: `${name}... (Logged)`, ingredients: ingredients, nutrition: { calories: Math.round(calories), protein: Math.round(protein), carbs: Math.round(carbs), fat: Math.round(fat) }, recipe: `User logged entry via text: "${text}"` }; };
+
+// --- HELPER COMPONENTS ---
+const NutritionBar = ({ label, value, total, color }) => { const percentage = total > 0 ? (value * (label === 'Protein' || label === 'Carbs' ? 4 : 9) / total) * 100 : 0; return (<View style={styles.macroRow}><Text style={styles.macroLabel}>{label}</Text><View style={styles.progressBarContainer}><View style={[styles.progressBar, { width: `${percentage}%`, backgroundColor: color }]} /></View><Text style={styles.macroValue}>{Math.round(value)}g</Text></View>);};
+
+const ShoppingListCard = ({ list, onAcquireItem, onAddCustomItem, title, onShare }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [newItemText, setNewItemText] = useState("");
+
+    const handleAddItem = () => {
+        if (newItemText.trim()) {
+            onAddCustomItem(newItemText.trim());
+            setNewItemText("");
+        }
+    };
+
+    return (
+        <View style={styles.card}>
+            <View style={styles.cardTitleRow}>
+                <TouchableOpacity style={styles.cardTitleTouchable} onPress={() => setIsExpanded(!isExpanded)}>
+                    <Text style={styles.cardTitle}>
+                        <Ionicons name="list-outline" size={22} color="#495057"/> {title} ({list.length})
+                    </Text>
+                    <Ionicons name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} size={24} color="#6c757d" />
+                </TouchableOpacity>
+                {onShare && (
+                    <TouchableOpacity style={styles.cardActionIcon} onPress={onShare}>
+                        <Ionicons name="share-social-outline" size={24} color="#007bff"/>
+                    </TouchableOpacity>
+                )}
+            </View>
+            
+            {isExpanded && (
+                <View>
+                    {list.length === 0 ? (<Text style={styles.placeholderText}>Your shopping list is empty.</Text>) : (
+                        <View style={styles.shoppingListContainer}>
+                            {list.map((item, index) => 
+                                <TouchableOpacity key={index} style={styles.shoppingListItem} onPress={() => onAcquireItem(item)}>
+                                    <Ionicons name="ellipse-outline" size={16} color="#007bff" style={{marginRight: 10}}/>
+                                    <Text style={styles.shoppingListItemText}>{item}</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
+                    <View style={styles.addItemContainer}>
+                        <TextInput style={styles.addItemInput} placeholder="Add item (e.g., Baby food)" value={newItemText} onChangeText={setNewItemText} onSubmitEditing={handleAddItem}/>
+                        <TouchableOpacity style={styles.addItemButton} onPress={handleAddItem}><Ionicons name="add-circle" size={32} color="#28a745" /></TouchableOpacity>
+                    </View>
+                </View>
+            )}
+        </View>
+    );
+};
+
+const EditableMealRow = ({ date, dayPlan, mealType, snackIndex, loggedStatus, findMealByName, onAddLogEntry, onClearMeal, onDeleteSnackRow, onLogToggle, onSuggestMeal, onSelectMeal, onUpdateMeal, onUpdateSnack, addMealToCache }) => {
+    const [activeOptions, setActiveOptions] = useState<{ key: string, options: Meal[] } | null>(null);
+    const [isSuggesting, setIsSuggesting] = useState(false);
+    const dayName = date.format('dddd');
+    const handleSuggestClick = async () => { const key = snackIndex !== undefined ? `${dayName}-${mealType}-${snackIndex}` : `${dayName}-${mealType}`; if (activeOptions?.key === key) { setActiveOptions(null); return; } setIsSuggesting(true); setActiveOptions({ key, options: [] }); const mealChoices = await onSuggestMeal(mealType, 3); setActiveOptions({ key, options: mealChoices }); setIsSuggesting(false); };
+    const handleOptionSelect = (meal: Meal) => { addMealToCache(meal); if (snackIndex !== undefined) { onUpdateSnack(dayName, snackIndex, meal.name); } else { onUpdateMeal(dayName, mealType as any, meal.name); } setActiveOptions(null); };
+    const isSnack = mealType === 'snack';
+    const mealItem = isSnack && snackIndex !== undefined ? dayPlan.snacks[snackIndex] : dayPlan[mealType];
+    if (!mealItem) return null;
+    const key = isSnack ? `${dayName}-${mealType}-${snackIndex}` : `${dayName}-${mealType}`;
+    const mealData = findMealByName(mealItem.name);
+    const isLogged = isSnack ? loggedStatus?.snacks?.[snackIndex] : loggedStatus?.[mealType];
+    const handlePress = () => { if (mealData) { onSelectMeal(mealData); } else { onAddLogEntry(date, mealType, snackIndex); } };
+    return (
+        <View>
+            <View style={styles.mealRow}><TouchableOpacity onPress={() => onLogToggle(date, mealType, snackIndex)} style={styles.logButton} disabled={!mealItem.name}><Ionicons name={isLogged ? "checkmark-circle" : "checkmark-circle-outline"} size={28} color={isLogged ? "#28a745" : mealItem.name ? "#adb5bd" : "#e9ecef"} /></TouchableOpacity><Ionicons name={mealTypes[mealType].icon} size={24} color="#858e96" /><TouchableOpacity style={styles.mealInfo} onPress={handlePress}><Text style={styles.mealType}>{isSnack ? `Snack ${snackIndex + 1}` : mealType.charAt(0).toUpperCase() + mealType.slice(1)} - {mealItem.time}</Text><Text style={styles.mealNameText} numberOfLines={1}>{mealItem.name ? mealItem.name.replace(/(\s*\(Logged\))? - \d+$/, '') : 'Tap to log...'}</Text></TouchableOpacity><Text style={styles.mealCalories}>{mealData ? `${mealData.nutrition.calories} kcal` : ''}</Text><View style={styles.mealActions}><TouchableOpacity style={styles.actionButton} onPress={handleSuggestClick} disabled={isSuggesting}><Ionicons name="shuffle-outline" size={24} color={isSuggesting ? '#adb5bd' : '#007bff'} /></TouchableOpacity>{mealItem.name && (<TouchableOpacity style={styles.actionButton} onPress={() => onClearMeal(date, mealType, snackIndex)}><Ionicons name="close-circle-outline" size={23} color="#dc3545" /></TouchableOpacity>)}{isSnack && <TouchableOpacity style={styles.actionButton} onPress={() => onDeleteSnackRow(dayName, snackIndex)}><Ionicons name="trash-outline" size={22} color="#6c757d" /></TouchableOpacity>}</View></View>
+            {activeOptions?.key === key && ( <View style={styles.optionsContainer}>{isSuggesting ? <ActivityIndicator color="#007bff" /> : activeOptions.options.length > 0 ? activeOptions.options.map(option => (<TouchableOpacity key={option.name} style={styles.optionButton} onPress={() => handleOptionSelect(option)}><Text style={styles.optionText}>{option.name}</Text><Text style={styles.optionCalories}>{option.nutrition.calories} kcal</Text></TouchableOpacity>)) : <Text style={styles.noOptionsText}>No matching options found.</Text>}</View> )}
+        </View>
+    );
+};
+
+const DayCard = ({ date, dayPlan, ...props }) => {
+    const dayName = date.format('dddd');
+    return ( <View style={styles.card}><Text style={styles.dayTitle}>{dayName} <Text style={styles.dateSubtext}>{date.format('MMM Do')}</Text></Text><EditableMealRow date={date} dayPlan={dayPlan} mealType="breakfast" {...props} /><EditableMealRow date={date} dayPlan={dayPlan} mealType="lunch" {...props} /><EditableMealRow date={date} dayPlan={dayPlan} mealType="dinner" {...props} />{(dayPlan.snacks || []).map((_, index) => <EditableMealRow key={`snack-${index}`} date={date} dayPlan={dayPlan} mealType="snack" snackIndex={index} {...props} />)}<TouchableOpacity style={styles.addSnackButton} onPress={() => props.onAddSnack(dayName)}><Ionicons name="add-outline" size={20} color="#007bff"/><Text style={styles.addSnackButtonText}>Add Snack</Text></TouchableOpacity></View> );
+};
+
+const SettingsModal = ({ isVisible, onClose, mealSettings, onSaveSettings, onAddCustomMeal }) => { const [timePicker, setTimePicker] = useState<{ visible: boolean, type: 'breakfast' | 'lunch' | 'dinner' | null }>({ visible: false, type: null }); const handleTimeChange = (event, selectedDate) => { const currentPickerType = timePicker.type; setTimePicker({ visible: Platform.OS === 'ios', type: currentPickerType }); if (event.type === 'dismissed') { setTimePicker({ visible: false, type: null }); return; } if (selectedDate && currentPickerType) { const newTime = moment(selectedDate).format('HH:mm'); onSaveSettings(currentSettings => ({ ...currentSettings, mealTimes: { ...currentSettings.mealTimes, [currentPickerType]: newTime, } })); } if (Platform.OS !== 'ios') { setTimePicker({ visible: false, type: null }); } }; if (!mealSettings) { return null; } return ( <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}><View style={styles.modalBackdrop}><View style={styles.modalContainer}><ScrollView><Text style={styles.modalTitle}>Settings</Text><View style={{ marginBottom: 20 }}><Text style={styles.settingTitle}>Default Meal Times</Text><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Breakfast</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'breakfast' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.breakfast}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Lunch</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'lunch' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.lunch}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Dinner</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'dinner' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.dinner}</Text></TouchableOpacity></View></View>{timePicker.visible && ( <View><DateTimePicker value={moment(mealSettings.mealTimes[timePicker.type], 'HH:mm').toDate()} mode="time" is24Hour={true} display="spinner" onChange={handleTimeChange} />{Platform.OS === 'ios' && <TouchableOpacity style={styles.iosPickerDoneButton} onPress={()=>setTimePicker({visible: false, type: null})}><Text style={styles.iosPickerDoneButtonText}>Done</Text></TouchableOpacity>}</View> )}<View style={{ marginBottom: 15 }}><Text style={styles.settingTitle}>Dietary Preferences</Text><View style={styles.preferenceContainer}>{preferenceOptions.map(option => (<TouchableOpacity key={option} style={[styles.preferenceButton, mealSettings.preferences.includes(option) && styles.preferenceButtonActive]} onPress={() => onSaveSettings(settings => ({...settings, preferences: settings.preferences.includes(option) ? settings.preferences.filter(p => p !== option) : [...settings.preferences, option]}))}><Text style={[styles.preferenceText, mealSettings.preferences.includes(option) && styles.preferenceTextActive]}>{option.charAt(0).toUpperCase() + option.slice(1)}</Text></TouchableOpacity>))}</View></View><View><Text style={styles.settingTitle}>Allergies & Intolerances</Text><TextInput placeholder="e.g., Peanut, Dairy, Gluten" style={styles.input} defaultValue={mealSettings.allergies.join(', ')} onEndEditing={(e) => onSaveSettings(settings => ({...settings, allergies: e.nativeEvent.text.split(",").map((a) => a.trim()).filter(Boolean)}))} /></View><TouchableOpacity style={styles.addMealButton} onPress={onAddCustomMeal}><Ionicons name="add-circle-outline" size={22} color="#fff" /><Text style={styles.addMealButtonText}>Add Custom Meal</Text></TouchableOpacity><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={onClose}><Text style={[styles.modalButtonText, {color: '#fff'}]}>Done</Text></TouchableOpacity></View></ScrollView></View></View></Modal> );};
+const LogMealModal = ({ isVisible, onClose, onSubmit, mealType, isParsing }) => { const [text, setText] = useState(""); const title = mealType ? mealType.charAt(0).toUpperCase() + mealType.slice(1) : ""; const handleSubmit = () => { if (text.trim().length > 0) { onSubmit(text); setText(""); } }; return ( <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalBackdrop}><View style={styles.modalContainer}><Text style={styles.modalTitle}>Log {title}</Text><Text style={styles.formLabel}>What did you have?</Text><TextInput style={[styles.input, styles.textArea]} placeholder="e.g., 2 eggs, 1 slice of toast, and a coffee" multiline value={text} onChangeText={setText} /><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={onClose} disabled={isParsing}><Text style={styles.modalButtonText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={handleSubmit} disabled={isParsing}>{isParsing ? (<ActivityIndicator color="#fff" />) : (<Text style={[styles.modalButtonText, {color: '#fff'}]}>Calculate & Log</Text>)}</TouchableOpacity></View></View></KeyboardAvoidingView></Modal> ); };
+
+const WeeklyOverviewModal = ({ isVisible, onClose, weekDates, mealPlan, weeklyShoppingList, onAcquireItem, onAddCustomItem, ...props }) => {
+    const formatMealPlanForShare = () => { let planText = "My Meal Plan for the Week:\n\n"; weekDates.forEach(date => { const dayName = date.format('dddd'); const dayPlan = mealPlan[dayName]; planText += `**${dayName}, ${date.format('MMM Do')}**\n`; planText += `B: ${dayPlan.breakfast.name || 'Not planned'}\n`; planText += `L: ${dayPlan.lunch.name || 'Not planned'}\n`; planText += `D: ${dayPlan.dinner.name || 'Not planned'}\n`; dayPlan.snacks.forEach((s, i) => { planText += `S${i+1}: ${s.name || 'Not planned'}\n`; }); planText += "\n"; }); return planText; };
+    const formatNutritionForShare = (totals) => { return `Weekly Nutrition Goals:\n- Avg. Daily Calories: ${Math.round(totals.calories / 7)} kcal\n- Total Protein: ${Math.round(totals.protein)}g\n- Total Carbs: ${Math.round(totals.carbs)}g\n- Total Fat: ${Math.round(totals.fat)}g`; };
+    const formatShoppingListForShare = (list) => { if (list.length === 0) return "My shopping list is empty!"; return "My Shopping List:\n- " + list.join('\n- '); };
+    const handleShare = async (content) => { try { await Share.share({ message: content }); } catch (error) { Alert.alert("Error", "Could not share content."); }};
+    const weeklyTotals = useMemo(() => { const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 }; if (!mealPlan) return totals; weekDates.forEach(date => { const dayPlan = mealPlan[date.format('dddd')]; if (!dayPlan) return; const meals = [dayPlan.breakfast.name, dayPlan.lunch.name, dayPlan.dinner.name, ...dayPlan.snacks.map(s => s.name)]; meals.forEach(name => { const mealData = props.findMealByName(name); if (mealData) { totals.calories += mealData.nutrition.calories; totals.protein += mealData.nutrition.protein; totals.carbs += mealData.nutrition.carbs; totals.fat += mealData.nutrition.fat; } }); }); return totals; }, [weekDates, mealPlan, props.findMealByName]);
+    return (
+        <Modal animationType="slide" visible={isVisible} onRequestClose={onClose}>
+            <View style={styles.overviewContainer}>
+                <View style={styles.overviewHeader}><Text style={styles.overviewTitle}>Week of {weekDates[0].format('MMM Do')}</Text><TouchableOpacity onPress={onClose} style={styles.overviewDoneButton}><Text style={styles.overviewDoneButtonText}>Done</Text></TouchableOpacity></View>
+                <ScrollView contentContainerStyle={styles.scrollContainer}>
+                    <View style={styles.card}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}><Ionicons name="document-text-outline" size={22} color="#495057"/> Weekly Meal Plan</Text><TouchableOpacity style={styles.cardActionIcon} onPress={() => handleShare(formatMealPlanForShare())}><Ionicons name="share-social-outline" size={24} color="#007bff"/></TouchableOpacity></View>{weekDates.map(date => { const dayName = date.format('dddd'); return ( <View key={dayName} style={styles.overviewDayContainer}><Text style={styles.overviewDayTitle}>{dayName}</Text><EditableMealRow mealType="breakfast" date={date} dayPlan={mealPlan[dayName]} {...props} /><EditableMealRow mealType="lunch" date={date} dayPlan={mealPlan[dayName]} {...props} /><EditableMealRow mealType="dinner" date={date} dayPlan={mealPlan[dayName]} {...props} />{(mealPlan[dayName].snacks || []).map((_, i) => <EditableMealRow key={`snack-${i}`} mealType="snack" snackIndex={i} date={date} dayPlan={mealPlan[dayName]} {...props} />)}</View> ); })}</View>
+                    <View style={styles.card}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}><Ionicons name="bar-chart-outline" size={22} color="#495057"/> Weekly Nutrition</Text><TouchableOpacity style={styles.cardActionIcon} onPress={() => handleShare(formatNutritionForShare(weeklyTotals))}><Ionicons name="share-social-outline" size={24} color="#007bff"/></TouchableOpacity></View><Text style={styles.weeklyCalories}>Avg. {Math.round(weeklyTotals.calories / 7) || 0} kcal / day</Text><NutritionBar label="Protein" value={weeklyTotals.protein} total={weeklyTotals.calories} color="#3498db" /><NutritionBar label="Carbs" value={weeklyTotals.carbs} total={weeklyTotals.calories} color="#f1c40f" /><NutritionBar label="Fat" value={weeklyTotals.fat} total={weeklyTotals.calories} color="#e74c3c" /></View>
+                    <ShoppingListCard list={weeklyShoppingList} onAcquireItem={onAcquireItem} onAddCustomItem={onAddCustomItem} title="This Week's Shopping List" onShare={() => handleShare(formatShoppingListForShare(weeklyShoppingList))}/>
+                    <TouchableOpacity onPress={() => handleShare(`${formatMealPlanForShare()}\n${formatNutritionForShare(weeklyTotals)}\n\n${formatShoppingListForShare(weeklyShoppingList)}`)} style={styles.exportButtonOverall}><Ionicons name="download-outline" size={20} color="#fff" /><Text style={styles.resetText}>Export Full Week</Text></TouchableOpacity>
+                </ScrollView>
+            </View>
+        </Modal>
+    );
+};
+
+// --- MAIN COMPONENT ---
+export default function MealPlanner() {
+  const { mealPlan: initialMealPlan, saveMealPlan, allMeals, saveAllMeals, mealSettings: initialMealSettings, saveMealSettings, isLoading } = useWellaura();
+  const [localMealPlan, setLocalMealPlan] = useState(initialMealPlan);
+  const [localMealSettings, setLocalMealSettings] = useState(initialMealSettings);
+  useEffect(() => { setLocalMealPlan(initialMealPlan); }, [initialMealPlan]);
+  useEffect(() => { setLocalMealSettings(initialMealSettings); }, [initialMealSettings]);
+  useEffect(() => { if (localMealPlan && JSON.stringify(localMealPlan) !== JSON.stringify(initialMealPlan)) { saveMealPlan(localMealPlan); } }, [localMealPlan, initialMealPlan, saveMealPlan]);
+  useEffect(() => { if (localMealSettings && JSON.stringify(localMealSettings) !== JSON.stringify(initialMealSettings)) { saveMealSettings(localMealSettings); } }, [localMealSettings, initialMealSettings, saveMealSettings]);
+
+  const [loggedMeals, setLoggedMeals] = useState({});
+  const [acquiredItems, setAcquiredItems] = useState(new Set<string>());
+  const [customShoppingItems, setCustomShoppingItems] = useState<string[]>([]);
+  const [currentDate, setCurrentDate] = useState(moment());
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [addMealModalVisible, setAddMealModalVisible] = useState(false);
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [overviewVisible, setOverviewVisible] = useState(false);
+  const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
+  const [logMealModalVisible, setLogMealModalVisible] = useState(false);
+  const [mealToLog, setMealToLog] = useState<{date: moment.Moment, type: Meal['type'], snackIndex?: number} | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
+
+  const findMealByName = useCallback((name: string): Meal | undefined => { if (!name) return undefined; return allMeals.find(m => m.name === name); }, [allMeals]);
+  const addMealToCache = (meal: Meal) => { saveAllMeals([...allMeals.filter(m => m.name !== meal.name), meal]); };
+  const handleDateChange = (event: any, selectedDate?: Date) => { setDatePickerVisible(Platform.OS === 'ios'); if (selectedDate) { setCurrentDate(moment(selectedDate)); } };
+  const handlePrevDay = () => setCurrentDate(currentDate.clone().subtract(1, 'day'));
+  const handleNextDay = () => setCurrentDate(currentDate.clone().add(1, 'day'));
+  const handleLogToggle = useCallback((date: moment.Moment, mealType: 'breakfast' | 'lunch' | 'dinner' | 'snack', snackIndex?: number) => { const dateString = date.format('YYYY-MM-DD'); setLoggedMeals(currentLogs => { const newLoggedMeals = JSON.parse(JSON.stringify(currentLogs || {})); const dayLog = newLoggedMeals[dateString] || { breakfast: false, lunch: false, dinner: false, snacks: [] }; if (mealType === 'snack' && snackIndex !== undefined) { if (!dayLog.snacks) dayLog.snacks = []; dayLog.snacks[snackIndex] = !dayLog.snacks[snackIndex]; } else if (mealType !== 'snack') { dayLog[mealType] = !dayLog[mealType]; } newLoggedMeals[dateString] = dayLog; return newLoggedMeals; }); }, []);
+  const weekDates = useMemo(() => { const startOfWeek = currentDate.clone().startOf('isoWeek'); return Array.from({ length: 7 }).map((_, i) => startOfWeek.clone().add(i, 'days')); }, [currentDate]);
+  const handleOpenLogModal = (date: moment.Moment, type: Meal['type'], snackIndex?: number) => { setMealToLog({ date, type, snackIndex }); setLogMealModalVisible(true); };
+  const handleLogFromText = async (text: string) => { if (!mealToLog) return; setIsParsing(true); try { const parsedData = await parseAndFetchNutrition(text); const uniqueName = `${parsedData.name} - ${Date.now()}`; const newMealObject: Meal = { ...parsedData, name: uniqueName, type: mealToLog.type, tags: ['logged', 'custom'], }; addMealToCache(newMealObject); const dayName = mealToLog.date.format('dddd'); if (mealToLog.type === 'snack' && mealToLog.snackIndex !== undefined) { updateSnack(dayName, mealToLog.snackIndex, newMealObject.name); } else { updateMeal(dayName, mealToLog.type, newMealObject.name); } handleLogToggle(mealToLog.date, mealToLog.type, mealToLog.snackIndex); } catch (error) { Alert.alert("Calculation Failed", "Couldn't determine nutrition. Please try again."); } finally { setIsParsing(false); setLogMealModalVisible(false); setMealToLog(null); } };
+  const dailyTotals = useMemo(() => { const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 }; const dateString = currentDate.format('YYYY-MM-DD'); const dayName = currentDate.format('dddd'); const dayLog = loggedMeals[dateString]; const dayPlan = localMealPlan[dayName]; if (!dayLog || !dayPlan) return totals; const addMealToTotals = (mealName: string) => { const mealData = allMeals.find(m => m.name === mealName); if (mealData) { totals.calories += mealData.nutrition.calories; totals.protein += mealData.nutrition.protein; totals.carbs += mealData.nutrition.carbs; totals.fat += mealData.nutrition.fat; }}; if (dayLog.breakfast) addMealToTotals(dayPlan.breakfast.name); if (dayLog.lunch) addMealToTotals(dayPlan.lunch.name); if (dayLog.dinner) addMealToTotals(dayPlan.dinner.name); if (dayLog.snacks && dayPlan.snacks) { dayPlan.snacks.forEach((snack, index) => { if (dayLog.snacks[index]) { addMealToTotals(snack.name); } }); } return totals; }, [currentDate, loggedMeals, localMealPlan, allMeals]);
+  const dailyShoppingList = useMemo(() => { const ingredients = new Set<string>(); const dayPlan = localMealPlan[currentDate.format('dddd')]; if (dayPlan) { const allMealsForDay = [dayPlan.breakfast.name, dayPlan.lunch.name, dayPlan.dinner.name, ...(dayPlan.snacks || []).map(s => s.name)]; allMealsForDay.forEach(mealName => { const mealData = findMealByName(mealName); mealData?.ingredients.forEach(item => ingredients.add(item)); }); } customShoppingItems.forEach(item => ingredients.add(item)); const fullList = Array.from(ingredients).sort(); return fullList.filter(item => !acquiredItems.has(item)); }, [currentDate, localMealPlan, findMealByName, acquiredItems, customShoppingItems]);
+  const weeklyShoppingList = useMemo(() => { const ingredients = new Set<string>(); weekDates.forEach(date => { const dayPlan = localMealPlan[date.format('dddd')]; if(dayPlan) { const allMealsForDay = [dayPlan.breakfast.name, dayPlan.lunch.name, dayPlan.dinner.name, ...(dayPlan.snacks || []).map(s => s.name)]; allMealsForDay.forEach(mealName => { const mealData = findMealByName(mealName); mealData?.ingredients.forEach(item => ingredients.add(item)); }); }}); customShoppingItems.forEach(item => ingredients.add(item)); const fullList = Array.from(ingredients).sort(); return fullList.filter(item => !acquiredItems.has(item)); }, [weekDates, localMealPlan, findMealByName, acquiredItems, customShoppingItems]);
+  const handleAcquireItem = (item: string) => { setAcquiredItems(prev => new Set(prev).add(item)); };
+  const handleAddCustomItem = (item: string) => { setCustomShoppingItems(prev => [...prev, item]); };
+  const handleClearMeal = (date: moment.Moment, mealType: Meal['type'], snackIndex?: number) => { const dayName = date.format('dddd'); setLocalMealPlan(currentPlan => { const updatedPlan = JSON.parse(JSON.stringify(currentPlan)); if (mealType === 'snack' && snackIndex !== undefined) { if (updatedPlan[dayName]?.snacks?.[snackIndex]) { updatedPlan[dayName].snacks[snackIndex].name = ""; } } else if (mealType !== 'snack') { if (updatedPlan[dayName]?.[mealType]) { updatedPlan[dayName][mealType].name = ""; } } return updatedPlan; }); setLoggedMeals(currentLogs => { const dateString = date.format('YYYY-MM-DD'); if (!currentLogs[dateString]) return currentLogs; const updatedLogs = JSON.parse(JSON.stringify(currentLogs)); if (mealType === 'snack' && snackIndex !== undefined) { if (updatedLogs[dateString].snacks) { updatedLogs[dateString].snacks[snackIndex] = false; } } else if (mealType !== 'snack') { updatedLogs[dateString][mealType] = false; } return updatedLogs; }); };
+  const handleDeleteSnackRow = (day: string, snackIndex: number) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); newPlan[day].snacks.splice(snackIndex, 1); return newPlan; }); setLoggedMeals(currentLogs => { const newLoggedMeals = JSON.parse(JSON.stringify(currentLogs || {})); Object.keys(newLoggedMeals).forEach(dateString => { const date = moment(dateString); if (date.format('dddd') === day && newLoggedMeals[dateString]?.snacks) { newLoggedMeals[dateString].snacks.splice(snackIndex, 1); } }); return newLoggedMeals; }); };
+  const updateMeal = (day: string, mealType: 'breakfast' | 'lunch' | 'dinner', value: string) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); newPlan[day][mealType].name = value; return newPlan; }); };
+  const handleAddSnack = (day: string) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); if (!newPlan[day].snacks) newPlan[day].snacks = []; newPlan[day].snacks.push({name: "", time: "15:00"}); return newPlan; }); };
+  const updateSnack = (day: string, snackIndex: number, value: string) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); newPlan[day].snacks[snackIndex].name = value; return newPlan; }); };
+  const clearPlan = () => { Alert.alert( "Reset Plan", "Are you sure you want to clear everything?", [ { text: "Cancel", style: "cancel" }, { text: "Yes, Reset", onPress: () => { const clearedPlan = days.reduce((acc, day) => { acc[day] = { breakfast: {name: "", time: localMealSettings.mealTimes.breakfast}, lunch: {name: "", time: localMealSettings.mealTimes.lunch}, dinner: {name: "", time: localMealSettings.mealTimes.dinner}, snacks: [] }; return acc; }, {} as MealPlan); setLocalMealPlan(clearedPlan); setLoggedMeals({}); setAcquiredItems(new Set()); setCustomShoppingItems([]); }, style: "destructive", }, ] ); };
+  const handleShareRecipe = async () => { if (!selectedMeal) return; const { name, ingredients, recipe } = selectedMeal; const ingredientsList = ingredients.map(ing => `- ${ing}`).join('\n'); const content = `**Recipe for ${name}**\n\n**Ingredients:**\n${ingredientsList}\n\n**Instructions:**\n${recipe}`; try { await Share.share({ message: content, title: `Recipe: ${name}` }); } catch (error) { Alert.alert((error as Error).message); }};
+  const handleAddNewMeal = () => { if (!newMeal.name || !newMeal.nutrition.calories) { Alert.alert("Missing Info", "Please enter at least a meal name and calories."); return; } const newMealObject: Meal = { name: newMeal.name.trim(), type: newMeal.type, ingredients: newMeal.ingredients.split(',').map(i => i.trim()).filter(Boolean), nutrition: { calories: parseInt(newMeal.nutrition.calories as string) || 0, protein: parseInt(newMeal.nutrition.protein as string) || 0, carbs: parseInt(newMeal.nutrition.carbs as string) || 0, fat: parseInt(newMeal.nutrition.fat as string) || 0, }, recipe: newMeal.recipe, tags: [], }; addMealToCache(newMealObject); setAddMealModalVisible(false); setNewMeal(initialNewMealState); };
+  const getMealOptions = useCallback((mealType: Meal['type'], count: number = 3): Promise<Meal[]> => { const apiMealType = mealType === 'lunch' || mealType === 'dinner' ? 'main course' : mealType; return fetchMealOptions({ mealType: apiMealType, preferences: localMealSettings.preferences, allergies: localMealSettings.allergies, count }); }, [localMealSettings.allergies, localMealSettings.preferences]);
+
+  if (!localMealPlan || isLoading) { return ( <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color="#007bff" /><Text>Loading Your Plan...</Text></View> ); }
+
+  const dayCardProps = { findMealByName, addMealToCache, loggedStatus: loggedMeals, onAddLogEntry: handleOpenLogModal, onClearMeal: handleClearMeal, onDeleteSnackRow: handleDeleteSnackRow, onLogToggle: handleLogToggle, onSuggestMeal: getMealOptions, onSelectMeal: setSelectedMeal, onUpdateMeal: updateMeal, onUpdateSnack: updateSnack, onAddSnack: handleAddSnack, };
+
+  return (
+    <View style={styles.container}>
+      <Modal animationType="slide" transparent={true} visible={!!selectedMeal} onRequestClose={() => setSelectedMeal(null)}><View style={styles.modalBackdrop}><View style={styles.recipeModalContainer}>{selectedMeal && (<><Text style={styles.recipeTitle}>{selectedMeal.name.replace(/(\s*\(Logged\))? - \d+$/, '')}</Text><ScrollView><Text style={styles.recipeSectionTitle}>Nutrition</Text><Text style={styles.recipeText}>Calories: {selectedMeal.nutrition.calories} kcal | Protein: {selectedMeal.nutrition.protein}g | Carbs: {selectedMeal.nutrition.carbs}g | Fat: {selectedMeal.nutrition.fat}g</Text><Text style={styles.recipeSectionTitle}>Ingredients</Text>{selectedMeal.ingredients.map((ing, i) => <Text key={i} style={styles.recipeText}>• {ing}</Text>)}<Text style={styles.recipeSectionTitle}>Instructions</Text><Text style={styles.recipeText}>{selectedMeal.recipe || "No instructions provided."}</Text></ScrollView><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setSelectedMeal(null)}><Text style={styles.modalButtonText}>Close</Text></TouchableOpacity><TouchableOpacity style={[styles.modalButton, styles.exportButton]} onPress={handleShareRecipe}><Ionicons name="share-social-outline" size={20} color="#fff" /><Text style={[styles.modalButtonText, { marginLeft: 8 }]}>Export</Text></TouchableOpacity></View></>)}</View></View></Modal>
+      <Modal animationType="slide" transparent={true} visible={addMealModalVisible} onRequestClose={() => setAddMealModalVisible(false)}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalBackdrop}><View style={styles.modalContainer}><ScrollView><Text style={styles.modalTitle}>Add a Custom Meal</Text>{/* ... existing code ... */}</ScrollView></View></KeyboardAvoidingView></Modal>
+      <SettingsModal isVisible={settingsModalVisible} onClose={() => setSettingsModalVisible(false)} mealSettings={localMealSettings} onSaveSettings={setLocalMealSettings} onAddCustomMeal={() => { setSettingsModalVisible(false); setAddMealModalVisible(true); }} />
+      {isDatePickerVisible && <DateTimePicker value={currentDate.toDate()} mode="date" display="default" onChange={handleDateChange} />}
+      {mealToLog && <LogMealModal isVisible={logMealModalVisible} onClose={() => setLogMealModalVisible(false)} onSubmit={handleLogFromText} mealType={mealToLog.type} isParsing={isParsing} />}
+      <WeeklyOverviewModal isVisible={overviewVisible} onClose={() => setOverviewVisible(false)} weekDates={weekDates} mealPlan={localMealPlan} weeklyShoppingList={weeklyShoppingList} onAcquireItem={handleAcquireItem} onAddCustomItem={handleAddCustomItem} {...dayCardProps} />
+
+      <View style={styles.headerContainer}><View><Text style={styles.headerTitle}>Your Daily Log</Text><Text style={styles.headerSubtitle}>Plan and track one day at a time</Text></View><View style={{flexDirection: 'row'}}><TouchableOpacity style={styles.headerButton} onPress={() => setOverviewVisible(true)}><Ionicons name="calendar-outline" size={26} color="#343a40" /></TouchableOpacity><TouchableOpacity style={[styles.headerButton, {marginLeft: 10}]} onPress={() => setSettingsModalVisible(true)}><Ionicons name="options-outline" size={26} color="#343a40" /></TouchableOpacity></View></View>
+      <View style={styles.dateNavigator}><TouchableOpacity onPress={handlePrevDay} style={styles.navButton}><Ionicons name="chevron-back-outline" size={24} color="#007bff" /></TouchableOpacity><TouchableOpacity onPress={() => setDatePickerVisible(true)}><Text style={styles.dateDisplayText}>{currentDate.isSame(moment(), 'day') ? "Today" : currentDate.format('MMM Do, YYYY')}</Text></TouchableOpacity><TouchableOpacity onPress={handleNextDay} style={styles.navButton}><Ionicons name="chevron-forward-outline" size={24} color="#007bff" /></TouchableOpacity></View>
+
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <View style={styles.card}><Text style={styles.cardTitle}><Ionicons name="today-outline" size={22} color="#495057" /> {currentDate.isSame(moment(), 'day') ? "Today's" : `${currentDate.format("dddd['s]")}`} Logged Nutrition</Text><Text style={styles.weeklyCalories}>{Math.round(dailyTotals.calories) || 0} kcal Logged</Text><NutritionBar label="Protein" value={dailyTotals.protein} total={dailyTotals.calories} color="#3498db" /><NutritionBar label="Carbs" value={dailyTotals.carbs} total={dailyTotals.calories} color="#f1c40f" /><NutritionBar label="Fat" value={dailyTotals.fat} total={dailyTotals.calories} color="#e74c3c" /></View>
+        
+        <DayCard date={currentDate} dayPlan={localMealPlan[currentDate.format('dddd')]} loggedStatus={loggedMeals[currentDate.format('YYYY-MM-DD')]} {...dayCardProps} />
+        
+        <ShoppingListCard list={dailyShoppingList} onAcquireItem={handleAcquireItem} onAddCustomItem={handleAddCustomItem} title="Today's Shopping List"/>
+
+        <TouchableOpacity onPress={clearPlan} style={styles.resetButton}><Ionicons name="refresh-outline" size={20} color="#fff" /><Text style={styles.resetText}>Reset Full Plan & Logs</Text></TouchableOpacity>
+      </ScrollView>
+    </View>
+  );
+}
+
+// --- STYLES ---
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f8f9fa', },
+  scrollContainer: { paddingHorizontal: 15, paddingTop: 10, paddingBottom: 50, },
+  headerContainer: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerButton: { backgroundColor: '#fff', padding: 8, borderRadius: 20, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, },
+  headerTitle: { fontSize: 26, fontWeight: "bold", color: "#212529", },
+  headerSubtitle: { fontSize: 16, color: "#6c757d", },
+  dateNavigator: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 15, },
+  navButton: { padding: 10, },
+  dateDisplayText: { fontSize: 18, fontWeight: 'bold', color: '#007bff' },
+  card: { backgroundColor: "#fff", borderRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10, marginBottom: 20, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 5, },
+  cardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', },
+  cardTitleTouchable: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  cardTitle: { fontSize: 20, fontWeight: "600", color: "#343a40", marginBottom: 20, flexDirection: 'row', alignItems: 'center'},
+  cardActionIcon: { marginBottom: 20, paddingLeft: 10 },
+  dayTitle: { fontSize: 22, fontWeight: "bold", color: "#212529", marginBottom: 10, },
+  dateSubtext: { fontWeight: '500', color: '#6c757d', fontSize: 18 },
+  mealRow: { flexDirection: "row", alignItems: "center", minHeight: 60, borderBottomWidth: 1, borderBottomColor: '#f1f3f5', },
+  logButton: { paddingRight: 10 },
+  mealInfo: { flex: 1, marginLeft: 10, paddingVertical: 10 },
+  mealType: { fontSize: 14, color: '#6c757d', fontWeight: '500', },
+  mealNameText: { fontSize: 16, fontWeight: '600', color: '#343a40', flexShrink: 1, },
+  mealCalories: { fontSize: 14, color: '#6c757d', fontWeight: '500', marginHorizontal: 10, minWidth: 50, textAlign: 'right' },
+  mealActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', },
+  actionButton: { padding: 5, },
+  addSnackButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, marginTop: 10, borderRadius: 8, },
+  addSnackButtonText: { color: '#007bff', fontSize: 15, fontWeight: 'bold', marginLeft: 8, },
+  weeklyCalories: { textAlign: 'center', fontSize: 18, fontWeight: 'bold', color: '#343a40', marginBottom: 20, },
+  shoppingListContainer: { paddingTop: 10 },
+  shoppingListItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, },
+  shoppingListItemText: { fontSize: 16, color: '#495057', },
+  placeholderText: { color: "#adb5bd", textAlign: 'center', fontStyle: 'italic', paddingVertical: 10, },
+  addItemContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 15, borderTopWidth: 1, borderTopColor: '#e9ecef', paddingTop: 15 },
+  addItemInput: { flex: 1, backgroundColor: "#f1f3f5", borderRadius: 10, padding: 10, fontSize: 16, color: "#343a40", marginRight: 10 },
+  addItemButton: { padding: 5 },
+  resetButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: "#dc3545", paddingVertical: 15, borderRadius: 15, marginTop: 10, marginHorizontal: 20, shadowColor: "#dc3545", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6, },
+  resetText: { fontSize: 16, fontWeight: "bold", color: "#fff", marginLeft: 10, },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', },
+  modalContainer: { width: '90%', maxHeight: '85%', backgroundColor: 'white', borderRadius: 20, padding: 25, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', color: '#343a40', marginBottom: 20, textAlign: 'center', },
+  modalButtonRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 30, gap: 15, },
+  modalButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  cancelButton: { backgroundColor: '#6c757d', },
+  saveButton: { backgroundColor: '#007bff', },
+  recipeModalContainer: { width: '90%', maxHeight: '80%', backgroundColor: 'white', borderRadius: 20, padding: 25, },
+  optionsContainer: { marginTop: 8, paddingHorizontal: 10, backgroundColor: '#f8f9fa', borderRadius: 10, borderWidth: 1, borderColor: '#e9ecef', },
+  overviewContainer: { flex: 1, backgroundColor: '#f8f9fa', paddingTop: Platform.OS === 'android' ? 30 : 60, },
+  overviewHeader: { paddingHorizontal: 20, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#dee2e6', backgroundColor: '#fff' },
+  overviewTitle: { fontSize: 22, fontWeight: 'bold', color: '#212529' },
+  overviewDoneButton: { padding: 10, },
+  overviewDoneButtonText: { fontSize: 18, color: '#007bff', fontWeight: '600' },
+  overviewDayContainer: { marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#e9ecef', paddingBottom: 10 },
+  overviewDayTitle: { fontSize: 18, fontWeight: 'bold', color: '#495057', marginBottom: 5, marginLeft: 15, marginTop: 10 },
+  exportButtonOverall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: "#17a2b8", paddingVertical: 15, borderRadius: 15, marginTop: 10, marginHorizontal: 20, shadowColor: "#17a2b8", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6, },
+  preferenceContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  preferenceButton: { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#f1f3f5', borderRadius: 20, },
+  preferenceButtonActive: { backgroundColor: '#007bff', },
+  preferenceText: { color: '#495057', fontWeight: '500', },
+  preferenceTextActive: { color: '#fff', },
+  formLabel: { fontSize: 16, fontWeight: '600', color: '#495057', marginBottom: 8, marginTop: 10, },
+  addMealButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#28a745', paddingVertical: 12, borderRadius: 10, marginTop: 20, },
+  addMealButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold', marginLeft: 8, },
+  exportButton: { backgroundColor: '#17a2b8', flexDirection: 'row', },
+  modalButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold', },
+  recipeTitle: { fontSize: 24, fontWeight: 'bold', color: '#343a40', marginBottom: 15, textAlign: 'center', },
+  recipeSectionTitle: { fontSize: 18, fontWeight: '700', color: '#495057', marginTop: 15, marginBottom: 5, borderBottomWidth: 1, borderColor: '#e9ecef', paddingBottom: 5, },
+  recipeText: { fontSize: 16, color: '#6c757d', lineHeight: 24, },
+  optionButton: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#e9ecef', },
+  optionText: { fontSize: 16, color: '#495057', flex: 1, paddingRight: 10, },
+  optionCalories: { fontSize: 14, color: '#6c757d' },
+  noOptionsText: { textAlign: 'center', color: '#adb5bd', fontStyle: 'italic', padding: 10 },
+  timeSettingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f3f5', },
+  timeValue: { fontSize: 16, fontWeight: '600', color: '#007bff', paddingVertical: 4, paddingHorizontal: 8, },
+  iosPickerDoneButton: { backgroundColor: '#007bff', padding: 15, alignItems: 'center', borderRadius: 10, margin: 10, },
+  iosPickerDoneButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' }
+});
