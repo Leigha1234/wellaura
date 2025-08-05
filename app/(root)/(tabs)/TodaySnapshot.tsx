@@ -33,10 +33,14 @@ const InfoRow = ({ icon, label, value, color, styles }) => (
 );
 
 // The main component
-export const TodaySnapshot = ({ onClose, todayEvents, todayHabits, todayMeals, theme }) => {
+export const TodaySnapshot = ({ onClose, todayEvents = [], todayHabits = [], todayMeals = {}, theme }) => {
     const today = moment();
     // Generate styles dynamically using the theme prop
     const styles = getDynamicStyles(theme);
+
+    // FIX: Pre-filter arrays to remove any null or undefined items before mapping
+    const validEvents = todayEvents.filter(Boolean);
+    const validHabits = todayHabits.filter(Boolean);
 
     return (
         <View style={styles.modalBackdrop}>
@@ -50,8 +54,8 @@ export const TodaySnapshot = ({ onClose, todayEvents, todayHabits, todayMeals, t
                 <ScrollView contentContainerStyle={styles.content}>
                     {/* Calendar Section */}
                     <Text style={styles.sectionTitle}>🗓️ Calendar</Text>
-                    {todayEvents.length > 0 ? (
-                        todayEvents.map(event => (
+                    {validEvents.length > 0 ? (
+                        validEvents.map(event => (
                             <InfoRow key={event.id} icon="time-outline" label={moment(event.start).format('h:mm A')} value={event.title} color={theme.primary} styles={styles} />
                         ))
                     ) : (
@@ -60,8 +64,8 @@ export const TodaySnapshot = ({ onClose, todayEvents, todayHabits, todayMeals, t
 
                     {/* Habits Section */}
                     <Text style={styles.sectionTitle}>🎯 Habits</Text>
-                    {todayHabits.length > 0 ? (
-                        todayHabits.map(habit => (
+                    {validHabits.length > 0 ? (
+                        validHabits.map(habit => (
                             <InfoRow key={habit.id} icon={habit.history?.[today.format('YYYY-MM-DD')]?.completed ? "checkmark-circle" : "ellipse-outline"} label="To Do" value={habit.name} color={theme.primary} styles={styles} />
                         ))
                     ) : (
@@ -70,9 +74,10 @@ export const TodaySnapshot = ({ onClose, todayEvents, todayHabits, todayMeals, t
 
                     {/* Meals Section */}
                     <Text style={styles.sectionTitle}>🍳 Meals</Text>
-                    <InfoRow icon="cafe-outline" label={todayMeals.breakfast.time} value={todayMeals.breakfast.name || 'Not planned'} color={theme.accent} styles={styles} />
-                    <InfoRow icon="restaurant-outline" label={todayMeals.lunch.time} value={todayMeals.lunch.name || 'Not planned'} color={theme.accent} styles={styles} />
-                    <InfoRow icon="moon-outline" label={todayMeals.dinner.time} value={todayMeals.dinner.name || 'Not planned'} color={theme.accent} styles={styles} />
+                    {/* FIX: Use optional chaining (?.) to safely access nested properties and provide fallbacks */}
+                    <InfoRow icon="cafe-outline" label={todayMeals?.breakfast?.time || 'Breakfast'} value={todayMeals?.breakfast?.name || 'Not planned'} color={theme.accent} styles={styles} />
+                    <InfoRow icon="restaurant-outline" label={todayMeals?.lunch?.time || 'Lunch'} value={todayMeals?.lunch?.name || 'Not planned'} color={theme.accent} styles={styles} />
+                    <InfoRow icon="moon-outline" label={todayMeals?.dinner?.time || 'Dinner'} value={todayMeals?.dinner?.name || 'Not planned'} color={theme.accent} styles={styles} />
 
                 </ScrollView>
             </View>
