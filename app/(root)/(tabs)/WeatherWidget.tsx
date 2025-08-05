@@ -21,11 +21,64 @@ const weatherIcons = {
     '50d': 'menu-outline', '50n': 'menu-outline',       // Mist (using a generic icon)
 };
 
-export const WeatherWidget = () => {
+// --- DYNAMIC STYLES ---
+const getDynamicStyles = (theme) => StyleSheet.create({
+    card: { 
+        backgroundColor: theme.surface, 
+        borderRadius: 20, 
+        padding: 20, 
+        marginTop: 20, 
+        shadowColor: theme.primary, 
+        shadowOffset: { width: 0, height: 4 }, 
+        shadowOpacity: 0.1, 
+        shadowRadius: 15, 
+        elevation: 5 
+    },
+    loadingContainer: { 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: 150 
+    },
+    weatherInfo: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        gap: 16 
+    },
+    temp: { 
+        fontSize: 32, 
+        fontWeight: 'bold', 
+        color: theme.textPrimary 
+    },
+    location: { 
+        fontSize: 16, 
+        color: theme.textSecondary 
+    },
+    suggestionBox: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        justifyContent: 'space-between', 
+        marginTop: 16, 
+        paddingTop: 16, 
+        borderTopWidth: 1, 
+        borderTopColor: theme.border 
+    },
+    suggestionText: { 
+        fontSize: 15, 
+        color: theme.textSecondary, 
+        flex: 1, 
+        lineHeight: 22 
+    },
+});
+
+
+export const WeatherWidget = ({ theme }) => {
     const router = useRouter();
     const { habits } = useWellaura();
     const [weather, setWeather] = useState(null);
     const [suggestion, setSuggestion] = useState<{ text: string, path: string } | null>(null);
+    
+    // Generate styles dynamically from the theme prop
+    const styles = getDynamicStyles(theme);
 
     useEffect(() => {
         const fetchWeather = async () => {
@@ -61,7 +114,7 @@ export const WeatherWidget = () => {
             } else if (mainWeather === 'rain' || mainWeather === 'drizzle' || mainWeather === 'snow') {
                 setSuggestion({ text: "A rainy day is perfect for planning some cozy meals.", path: '/(root)/(tabs)/meal-planner' });
             } else {
-                 setSuggestion({ text: "Check your budget to plan for the day ahead.", path: '/(root)/(tabs)/budget-page' });
+                 setSuggestion({ text: "Check your budget to plan for the day ahead.", path: '/(root)/(tabs)/budget' });
             }
         }
     }, [weather, habits]);
@@ -69,7 +122,7 @@ export const WeatherWidget = () => {
     if (!weather) {
         return (
             <View style={[styles.card, styles.loadingContainer]}>
-                <ActivityIndicator color="#F97316" />
+                <ActivityIndicator color={theme.primary} />
             </View>
         );
     }
@@ -79,7 +132,7 @@ export const WeatherWidget = () => {
     return (
         <View style={styles.card}>
             <View style={styles.weatherInfo}>
-                <Ionicons name={iconName} size={48} color="#1E293B" />
+                <Ionicons name={iconName} size={48} color={theme.textPrimary} />
                 <View>
                     <Text style={styles.temp}>{Math.round(weather.main.temp)}°C</Text>
                     <Text style={styles.location}>{weather.name}</Text>
@@ -91,19 +144,9 @@ export const WeatherWidget = () => {
                     onPress={() => suggestion.path && router.push(suggestion.path)}
                 >
                     <Text style={styles.suggestionText}>{suggestion.text}</Text>
-                    {suggestion.path && <Ionicons name="arrow-forward" size={18} color="#F97316" />}
+                    {suggestion.path && <Ionicons name="arrow-forward" size={18} color={theme.primary} />}
                 </TouchableOpacity>
             )}
         </View>
     );
 };
-
-const styles = StyleSheet.create({
-    card: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, marginTop: 20, shadowColor: "#F97316", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 15, elevation: 5 },
-    loadingContainer: { justifyContent: 'center', alignItems: 'center', height: 150 },
-    weatherInfo: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-    temp: { fontSize: 32, fontWeight: 'bold', color: '#1E293B' },
-    location: { fontSize: 16, color: '#64748B' },
-    suggestionBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
-    suggestionText: { fontSize: 15, color: '#334155', flex: 1, lineHeight: 22 },
-});
