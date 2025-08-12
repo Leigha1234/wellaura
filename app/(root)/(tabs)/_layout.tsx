@@ -1,24 +1,27 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { useTheme } from '../../context/ThemeContext'; // Import your theme hook
 
-/**
- * This is the layout for your tab bar.
- * It uses the default Expo Router tab bar with custom icons.
- */
 export default function TabLayout() {
+  const { theme } = useTheme(); // Use your theme to get colors
+
   return (
     <Tabs
       screenOptions={{
-        // You can set a global tint color for the active icon here
-        tabBarActiveTintColor: '#1e2a3c', 
+        headerShown: false, // This hides the header across all tabs
+        tabBarActiveTintColor: theme.primary, // Use your theme's primary color
+        tabBarInactiveTintColor: theme.textSecondary, // Use your theme's secondary color
+        tabBarStyle: {
+          backgroundColor: theme.surface, // Set the tab bar background color
+          borderTopColor: theme.border,
+        }
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Home',
-          headerShown: false, // Hide header on the dashboard page
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="home-outline" size={size} color={color} />
           ),
@@ -59,6 +62,9 @@ export default function TabLayout() {
       <Tabs.Screen name="test" options={{ href: null }} />
       <Tabs.Screen name="sign-in" options={{ href: null }} />
       <Tabs.Screen name="laura" options={{ href: null }} />
+      <Tabs.Screen name="recipes" options={{ href: null }} />
+      <Tabs.Screen name="monthlymealview" options={{ href: null }} />
+      <Tabs.Screen name="weeklymealview" options={{ href: null }} />
     </Tabs>
   );
 }
