@@ -3,19 +3,19 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import moment from "moment";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    Share,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 // This feature requires react-native-gesture-handler
 // Please ensure it is installed: npm install react-native-gesture-handler
@@ -426,7 +426,7 @@ const formatRecipe = (recipe, ingredients, servings) => {
     });
     return formatted;
 };
-
+// comment
 // --- STYLES ---
 const getDynamicStyles = (theme) => {
     const onPrimaryColor = tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary;
