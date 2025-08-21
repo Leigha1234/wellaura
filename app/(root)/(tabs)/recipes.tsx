@@ -29,7 +29,7 @@ import { Meal } from "../../types";
 // --- FILTER OPTIONS ---
 const filterOptions = ["Vegetarian", "Vegan", "Gluten-Free", "Dairy-Free", "Chicken", "Beef", "Pork", "Seafood"];
 
-// --- HELPER COMPONENTS ---
+// --- HELPER COMPONENTS FOR THIS PAGE ---
 
 const AddRecipeModal = ({ isVisible, onClose, onSave, styles, theme }) => {
     const [name, setName] = useState('');
@@ -186,7 +186,7 @@ export default function Recipes() {
     
     const handleSaveCustomRecipe = (newMeal: Meal) => { addMealToCache(newMeal); setRecipes(prev => [newMeal, ...prev]); };
     const handleAddToPlan = (meal: Meal) => { setMealToAdd(meal); };
-    const handleConfirmAddToPlan = (day, mealType) => { if (!mealToAdd) return; addMealToCache(mealToAdd); if (mealType === 'snack') { onUpdateSnack(day, 0, mealToAdd.name, mealToAdd.id); } else { onUpdateMeal(day, mealType, { id: mealToAdd.id, name: mealToAdd.name }); } setMealToAdd(null); Alert.alert("Meal Added!", `${mealToAdd.name} has been added to the plan for ${day}.`); };
+    const handleConfirmAddToPlan = (day, mealType) => { if (!mealToAdd) return; addMealToCache(mealToAdd); if (mealType === 'snack') { onUpdateSnack(day, 0, mealToAdd.name, mealToAdd.id); } else { updateMeal(day, mealType, mealToAdd); } setMealToAdd(null); Alert.alert("Meal Added!", `${mealToAdd.name} has been added to the plan for ${day}.`); };
 
     return (
         <View style={styles.recipeBookContainer}>

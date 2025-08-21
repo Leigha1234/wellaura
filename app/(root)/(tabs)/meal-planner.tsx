@@ -19,11 +19,12 @@ import {
   View,
 } from "react-native";
 import { Swipeable } from 'react-native-gesture-handler';
+import GestureRecognizer from 'react-native-swipe-gestures';
 import tinycolor from "tinycolor2";
 import { useFavorites } from "../../context/FavoritesContext";
 import { useMealPlan } from "../../context/MealPlanContext";
 import { useTheme } from "../../context/ThemeContext";
-import { fetchRandomRecipes, getRecipeDetails } from "../../services/spoonacular";
+import { fetchRandomRecipes, getRecipeDetails } from "../../services/edamam";
 import { Meal } from "../../types";
 import { useWellaura } from "../../WellauraContext";
 
@@ -33,190 +34,34 @@ const mealTypes = { breakfast: { icon: "cafe-outline" as const }, lunch: { icon:
 const DRINK_NUTRITION = { coffee: { calories: 5, protein: 0, carbs: 1, fat: 0 }, tea: { calories: 2, protein: 0, carbs: 0.5, fat: 0 }, smoothie: { calories: 180, protein: 4, carbs: 35, fat: 2 },};
 const preferenceOptions = ["vegetarian", "vegan", "gluten-free", "dairy-free", "nut-free"];
 
-// --- HELPER COMPONENTS ---
-type HeaderMenuProps = {
-  onOpenCalendar: () => void;
-  onOpenOverview: () => void;
-  onOpenSettings: () => void;
-  styles: any;
-  theme: any;
+// --- NUTRITION PARSING FUNCTION ---
+const parseAndFetchNutrition = async (text: string): Promise<Partial<Meal>> => {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    let calories = 0, protein = 0, carbs = 0, fat = 0;
+    const lowerText = text.toLowerCase();
+    if (lowerText.includes("toast") || lowerText.includes("bread")) { calories += 80; carbs += 15; }
+    if (lowerText.includes("egg")) { const count = lowerText.match(/(\d+)\s*egg/)?.[1] || 1; calories += 75 * Number(count); protein += 6 * Number(count); fat += 5 * Number(count); }
+    if (lowerText.includes("chicken")) { calories += 250; protein += 40; fat += 8; }
+    if (lowerText.includes("protein shake")) { calories += 180; protein += 30; carbs += 5; }
+    if (lowerText.includes("pizza")) { calories += 285; protein += 12; carbs += 36; fat += 10; }
+    if (lowerText.includes("salad")) { calories += 150; protein += 5; carbs += 10; fat += 8; }
+    if (calories === 0) { calories = 250; protein = 10; carbs = 20; fat = 10; }
+    const ingredients = text.split(/,|\sand|with/).map(s => ({ name: s.trim(), text: s.trim() })).filter(Boolean);
+    const name = text.split(" ").slice(0, 4).join(" ");
+    return { name: `${name}... (Logged)`, ingredients, nutrition: { calories: Math.round(calories), protein: Math.round(protein), carbs: Math.round(carbs), fat: Math.round(fat) }, recipe: `User logged entry: "${text}"` };
 };
 
-const HeaderMenu = ({ onOpenCalendar, onOpenOverview, onOpenSettings, styles, theme }: HeaderMenuProps) => {
+// --- HELPER COMPONENTS ---
+const HeaderMenu = ({ onOpenCalendar, onOpenOverview, onOpenSettings, styles, theme }) => {
     const [visible, setVisible] = useState(false);
     return ( <View><TouchableOpacity style={styles.headerButton} onPress={() => setVisible(true)}><Ionicons name="ellipsis-vertical" size={26} color={theme.textPrimary} /></TouchableOpacity><Modal visible={visible} transparent={true} animationType="fade" onRequestClose={() => setVisible(false)}><TouchableOpacity style={styles.menuBackdrop} onPress={() => setVisible(false)}><View style={styles.menuContainer}><TouchableOpacity style={styles.menuItem} onPress={() => { setVisible(false); onOpenCalendar(); }}><Ionicons name="grid-outline" size={22} color={theme.textSecondary} /><Text style={styles.menuItemText}>Monthly View</Text></TouchableOpacity><TouchableOpacity style={styles.menuItem} onPress={() => { setVisible(false); onOpenOverview(); }}><Ionicons name="calendar-outline" size={22} color={theme.textSecondary} /><Text style={styles.menuItemText}>Weekly View</Text></TouchableOpacity><TouchableOpacity style={styles.menuItem} onPress={() => { setVisible(false); onOpenSettings(); }}><Ionicons name="options-outline" size={22} color={theme.textSecondary} /><Text style={styles.menuItemText}>Settings</Text></TouchableOpacity></View></TouchableOpacity></Modal></View> );
 };
 
-type NutritionBarProps = {
-  label: string;
-  loggedValue: number;
-  plannedValue: number;
-  totalCalories: number;
-  color: string;
-  styles: any;
-};
-
-const NutritionBar: React.FC<NutritionBarProps> = ({ label, loggedValue, plannedValue, totalCalories, color, styles }) => {
-  const calPerGram = (label === 'Protein' || label === 'Carbs') ? 4 : 9;
-  const loggedPercentage = totalCalories > 0 ? (loggedValue * calPerGram / totalCalories) * 100 : 0;
-  const plannedPercentage = 100;
-  return (
-    <View style={styles.macroRow}>
-      <Text style={styles.macroLabel}>{label}</Text>
-      <View style={styles.progressBarContainer}>
-        <View style={[styles.progressBar, { width: `${plannedPercentage}%`, backgroundColor: tinycolor(color).setAlpha(0.2).toString() }]} />
-        <View style={[styles.progressBar, { width: `${loggedPercentage}%`, backgroundColor: color, position: 'absolute' }]} />
-      </View>
-      <Text style={styles.macroValue}>{Math.round(loggedValue)}/{Math.round(plannedValue)}g</Text>
-    </View>
-  );
-};
-type ShoppingListCardProps = {
-  list: string[];
-  clearedItems: string[];
-  onAcquireItem: (item: string) => void;
-  onUnacquireItem: (item: string) => void;
-  onAddCustomItem: (item: string) => void;
-  onClearHistory: () => void;
-  title: string;
-  styles: any;
-  theme: any;
-};
-
-const ShoppingListCard: React.FC<ShoppingListCardProps> = ({
-  list,
-  clearedItems,
-  onAcquireItem,
-  onUnacquireItem,
-  onAddCustomItem,
-  onClearHistory,
-  title,
-  styles,
-  theme,
-}) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [showCleared, setShowCleared] = useState(false);
-  const [newItemText, setNewItemText] = useState("");
-  const handleAddItem = () => {
-    if (newItemText.trim()) {
-      onAddCustomItem(newItemText.trim());
-      setNewItemText("");
-    }
-  };
-  const handleClearHistory = () => {
-    Alert.alert(
-      "Clear History",
-      "Are you sure you want to permanently delete all cleared shopping items?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Yes, Clear", onPress: onClearHistory, style: "destructive" },
-      ]
-    );
-  };
-  return (
-    <View style={styles.card}>
-      <TouchableOpacity onPress={() => setIsExpanded(!isExpanded)}>
-        <View style={styles.cardTitleRow}>
-          <TouchableOpacity
-            style={styles.cardTitleTouchable}
-            onPress={() => setIsExpanded(!isExpanded)}
-          >
-            <Text style={styles.cardTitle}>
-              <Ionicons name="list-outline" size={22} color={theme.textPrimary} /> {title} ({list.length})
-            </Text>
-            <Ionicons
-              name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"}
-              size={24}
-              color={theme.textSecondary}
-            />
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
-      {isExpanded && (
-        <View>
-          {list.length === 0 && clearedItems.length === 0 ? (
-            <Text style={styles.placeholderText}>Your shopping list is empty.</Text>
-          ) : (
-            <View style={styles.shoppingListContainer}>
-              {list.map((item, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.shoppingListItem}
-                  onPress={() => onAcquireItem(item)}
-                >
-                  <Ionicons
-                    name="ellipse-outline"
-                    size={16}
-                    color={theme.primary}
-                    style={{ marginRight: 10 }}
-                  />
-                  <Text style={styles.shoppingListItemText}>{item}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-          <View style={styles.addItemContainer}>
-            <TextInput
-              style={styles.addItemInput}
-              placeholder="Add custom item..."
-              value={newItemText}
-              onChangeText={setNewItemText}
-              onSubmitEditing={handleAddItem}
-              placeholderTextColor={theme.textSecondary}
-            />
-            <TouchableOpacity style={styles.addItemButton} onPress={handleAddItem}>
-              <Ionicons name="add-circle" size={32} color="#28a745" />
-            </TouchableOpacity>
-          </View>
-          {clearedItems.length > 0 && (
-            <View style={styles.clearedItemsContainer}>
-              <View style={styles.clearedItemsHeader}>
-                <TouchableOpacity
-                  style={styles.showClearedButton}
-                  onPress={() => setShowCleared(!showCleared)}
-                >
-                  <Text style={styles.showClearedButtonText}>
-                    {showCleared ? "Hide" : "Show"} Cleared ({clearedItems.length})
-                  </Text>
-                  <Ionicons
-                    name={showCleared ? "chevron-up-outline" : "chevron-down-outline"}
-                    size={20}
-                    color={theme.primary}
-                    style={{ marginLeft: 5 }}
-                  />
-                </TouchableOpacity>
-                {showCleared && (
-                  <TouchableOpacity onPress={handleClearHistory}>
-                    <Text style={styles.clearHistoryButtonText}>Clear History</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              {showCleared &&
-                clearedItems.map((item, index) => (
-                  <TouchableOpacity
-                    key={`cleared-${index}`}
-                    style={styles.shoppingListItem}
-                    onPress={() => onUnacquireItem(item)}
-                  >
-                    <Ionicons
-                      name="arrow-undo-outline"
-                      size={16}
-                      color={theme.textSecondary}
-                      style={{ marginRight: 10 }}
-                    />
-                    <Text style={styles.clearedItemText}>{item}</Text>
-                  </TouchableOpacity>
-                ))}
-            </View>
-          )}
-        </View>
-      )}
-    </View>
-  );
-};
-const EditableMealRow = ({ date, dayPlan, mealType, snackIndex, loggedStatus, findMealById, onAddLogEntry, onClearMeal, onDeleteSnackRow, onLogToggle, onSuggestMeal, onSelectMeal, onUpdateMeal, onUpdateSnack, addMealToCache, styles, theme }) => { const [activeOptions, setActiveOptions] = useState<{ key: string, options: Meal[] } | null>(null); const [isSuggesting, setIsSuggesting] = useState(false); const dayName = date.format('dddd'); const handleSuggestClick = async () => { const key = snackIndex !== undefined ? `${dayName}-${mealType}-${snackIndex}` : `${dayName}-${mealType}`; setIsSuggesting(true); setActiveOptions({ key, options: [] }); const mealChoices = await onSuggestMeal(mealType as string, 3); setActiveOptions({ key, options: mealChoices }); setIsSuggesting(false); }; const handleOptionSelect = (meal: Meal) => { addMealToCache(meal); if (snackIndex !== undefined) { onUpdateSnack(dayName, snackIndex, meal.name, meal.id); } else { onUpdateMeal(dayName, mealType as any, meal); } setActiveOptions(null); }; const isSnack = mealType === 'snack'; const mealItem = isSnack && snackIndex !== undefined ? dayPlan.snacks[snackIndex] : dayPlan[mealType]; if (!mealItem) return null; const key = isSnack ? `${dayName}-${mealType}-${snackIndex}` : `${dayName}-${mealType}`; const mealData = findMealById(mealItem.id); const isLogged = isSnack ? loggedStatus?.[date.format('YYYY-MM-DD')]?.snacks?.[snackIndex] : loggedStatus?.[date.format('YYYY-MM-DD')]?.[mealType]; const handlePress = () => { if (mealData) { onSelectMeal(mealData, date, mealType, snackIndex); } else { onAddLogEntry(date, mealType, snackIndex); } }; return ( <View><View style={styles.mealRow}><TouchableOpacity onPress={() => onLogToggle(date, mealType, snackIndex)} style={styles.logButton} disabled={!mealItem.name}><Ionicons name={isLogged ? "checkmark-circle" : "checkmark-circle-outline"} size={28} color={isLogged ? "#28a745" : mealItem.name ? theme.textSecondary : theme.border} /></TouchableOpacity><Ionicons name={mealTypes[mealType].icon} size={24} color={theme.textSecondary} /><TouchableOpacity style={styles.mealInfo} onPress={handlePress}><Text style={styles.mealType}>{isSnack ? `Snack ${snackIndex + 1}` : mealType.charAt(0).toUpperCase() + mealType.slice(1)} - {mealItem.time}</Text><Text style={styles.mealNameText} numberOfLines={1}>{mealItem.name ? mealItem.name.replace(/(\s*\(Logged\))? - \d+$/, '') : 'Tap to add...'}</Text></TouchableOpacity><Text style={styles.mealCalories}>{mealData ? `${Math.round(mealData.nutrition.calories * (mealItem.servings || 1))} kcal` : ''}</Text><View style={styles.mealActions}><TouchableOpacity style={styles.actionButton} onPress={handleSuggestClick} disabled={isSuggesting}><Ionicons name="shuffle-outline" size={24} color={isSuggesting ? theme.textSecondary : theme.primary} /></TouchableOpacity>{mealItem.name && (<TouchableOpacity style={styles.actionButton} onPress={() => onClearMeal(date, mealType, snackIndex)}><Ionicons name="close-circle-outline" size={23} color="#dc3545" /></TouchableOpacity>)}{isSnack && <TouchableOpacity style={styles.actionButton} onPress={() => onDeleteSnackRow(dayName, snackIndex)}><Ionicons name="trash-outline" size={22} color={theme.textSecondary} /></TouchableOpacity>}</View></View>{activeOptions?.key === key && ( <View style={styles.optionsContainer}>{isSuggesting ? <ActivityIndicator color={theme.primary} /> : activeOptions.options.length > 0 ? activeOptions.options.map(option => (<TouchableOpacity key={option.id} style={styles.optionButton} onPress={() => handleOptionSelect(option)}><Text style={styles.optionText}>{option.name}</Text><Text style={styles.optionCalories}>{option.nutrition.calories} kcal</Text></TouchableOpacity>)) : <Text style={styles.noOptionsText}>No matching options found.</Text>}</View> )}</View> );};
+const NutritionBar = ({ label, loggedValue, plannedValue, totalCalories, color, styles }) => { const calPerGram = (label === 'Protein' || label === 'Carbs') ? 4 : 9; const loggedPercentage = totalCalories > 0 ? (loggedValue * calPerGram / totalCalories) * 100 : 0; const plannedPercentage = 100; return ( <View style={styles.macroRow}><Text style={styles.macroLabel}>{label}</Text><View style={styles.progressBarContainer}><View style={[styles.progressBar, { width: `${plannedPercentage}%`, backgroundColor: tinycolor(color).setAlpha(0.2).toString() }]} /><View style={[styles.progressBar, { width: `${loggedPercentage}%`, backgroundColor: color, position: 'absolute' }]} /></View><Text style={styles.macroValue}>{Math.round(loggedValue)}/{Math.round(plannedValue)}g</Text></View> );};
+const ShoppingListCard = ({ list, clearedItems, onAcquireItem, onUnacquireItem, onAddCustomItem, onClearHistory, title, styles, theme }) => { const [isExpanded, setIsExpanded] = useState(false); const [showCleared, setShowCleared] = useState(false); const [newItemText, setNewItemText] = useState(""); const handleAddItem = () => { if (newItemText.trim()) { onAddCustomItem(newItemText.trim()); setNewItemText(""); } }; const handleClearHistory = () => { Alert.alert( "Clear History", "Are you sure you want to permanently delete all cleared shopping items?", [ { text: "Cancel", style: "cancel" }, { text: "Yes, Clear", onPress: onClearHistory, style: "destructive" } ] )}; return ( <View style={styles.card}><TouchableOpacity onPress={() => setIsExpanded(!isExpanded)}><View style={styles.cardTitleRow}><TouchableOpacity style={styles.cardTitleTouchable} onPress={() => setIsExpanded(!isExpanded)}><Text style={styles.cardTitle}><Ionicons name="list-outline" size={22} color={theme.textPrimary}/> {title} ({list.length})</Text><Ionicons name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} size={24} color={theme.textSecondary} /></TouchableOpacity></View></TouchableOpacity>{isExpanded && ( <View>{list.length === 0 && clearedItems.length === 0 ? (<Text style={styles.placeholderText}>Your shopping list is empty.</Text>) : ( <View style={styles.shoppingListContainer}>{list.map((item, index) => <TouchableOpacity key={index} style={styles.shoppingListItem} onPress={() => onAcquireItem(item)}><Ionicons name="ellipse-outline" size={16} color={theme.primary} style={{marginRight: 10}}/><Text style={styles.shoppingListItemText}>{item}</Text></TouchableOpacity>)}</View> )}<View style={styles.addItemContainer}><TextInput style={styles.addItemInput} placeholder="Add custom item..." value={newItemText} onChangeText={setNewItemText} onSubmitEditing={handleAddItem} placeholderTextColor={theme.textSecondary}/><TouchableOpacity style={styles.addItemButton} onPress={handleAddItem}><Ionicons name="add-circle" size={32} color="#28a745" /></TouchableOpacity></View>{clearedItems.length > 0 && (<View style={styles.clearedItemsContainer}><View style={styles.clearedItemsHeader}><TouchableOpacity style={styles.showClearedButton} onPress={() => setShowCleared(!showCleared)}><Text style={styles.showClearedButtonText}>{showCleared ? 'Hide' : 'Show'} Cleared ({clearedItems.length})</Text><Ionicons name={showCleared ? "chevron-up-outline" : "chevron-down-outline"} size={20} color={theme.primary} style={{marginLeft: 5}} /></TouchableOpacity>{showCleared && <TouchableOpacity onPress={handleClearHistory}><Text style={styles.clearHistoryButtonText}>Clear History</Text></TouchableOpacity>}</View>{showCleared && clearedItems.map((item, index) => ( <TouchableOpacity key={`cleared-${index}`} style={styles.shoppingListItem} onPress={() => onUnacquireItem(item)}><Ionicons name="arrow-undo-outline" size={16} color={theme.textSecondary} style={{marginRight: 10}}/><Text style={styles.clearedItemText}>{item}</Text></TouchableOpacity> ))}</View>)}</View> )}</View> );};
+const EditableMealRow = ({ date, dayPlan, mealType, snackIndex, loggedStatus, findMealById, onAddLogEntry, onClearMeal, onDeleteSnackRow, onLogToggle, onSuggestMeal, onSelectMeal, onUpdateMeal, onUpdateSnack, addMealToCache, styles, theme }) => { const [activeOptions, setActiveOptions] = useState<{ key: string, options: Meal[] } | null>(null); const [isSuggesting, setIsSuggesting] = useState(false); const dayName = date.format('dddd'); const handleSuggestClick = async () => { const key = snackIndex !== undefined ? `${dayName}-${mealType}-${snackIndex}` : `${dayName}-${mealType}`; setIsSuggesting(true); setActiveOptions({ key, options: [] }); const mealChoices = await onSuggestMeal(mealType as string, 3); setActiveOptions({ key, options: mealChoices }); setIsSuggesting(false); }; const handleOptionSelect = (meal: Meal) => { addMealToCache(meal); if (snackIndex !== undefined) { onUpdateSnack(dayName, snackIndex, meal.name, meal.id); } else { onUpdateMeal(dayName, mealType as any, meal); } setActiveOptions(null); }; const isSnack = mealType === 'snack'; const mealItem = isSnack && snackIndex !== undefined ? dayPlan.snacks[snackIndex] : dayPlan[mealType]; if (!mealItem) return null; const mealData = findMealById(mealItem.id); const isLogged = isSnack ? loggedStatus?.[date.format('YYYY-MM-DD')]?.snacks?.[snackIndex] : loggedStatus?.[date.format('YYYY-MM-DD')]?.[mealType]; const handlePress = () => { if (mealData) { onSelectMeal(mealData, date, mealType, snackIndex); } else { onAddLogEntry(date, mealType, snackIndex); } }; return ( <View><View style={styles.mealRow}><TouchableOpacity onPress={() => onLogToggle(date, mealType, snackIndex)} style={styles.logButton} disabled={!mealItem.name}><Ionicons name={isLogged ? "checkmark-circle" : "checkmark-circle-outline"} size={28} color={isLogged ? "#28a745" : mealItem.name ? theme.textSecondary : theme.border} /></TouchableOpacity><Ionicons name={mealTypes[mealType].icon} size={24} color={theme.textSecondary} /><TouchableOpacity style={styles.mealInfo} onPress={handlePress}><Text style={styles.mealType}>{isSnack ? `Snack ${snackIndex + 1}` : mealType.charAt(0).toUpperCase() + mealType.slice(1)} - {mealItem.time}</Text><Text style={styles.mealNameText} numberOfLines={1}>{mealItem.name ? mealItem.name.replace(/^Recipe: /i, '') : 'Tap to add...'}</Text></TouchableOpacity><Text style={styles.mealCalories}>{mealData ? `${Math.round(mealData.nutrition.calories * (mealItem.servings || 1))} kcal` : ''}</Text><View style={styles.mealActions}><TouchableOpacity style={styles.actionButton} onPress={handleSuggestClick} disabled={isSuggesting}><Ionicons name="shuffle-outline" size={24} color={isSuggesting ? theme.textSecondary : theme.primary} /></TouchableOpacity>{mealItem.name && (<TouchableOpacity style={styles.actionButton} onPress={() => onClearMeal(date, mealType, snackIndex)}><Ionicons name="close-circle-outline" size={23} color="#dc3545" /></TouchableOpacity>)}{isSnack && <TouchableOpacity style={styles.actionButton} onPress={() => onDeleteSnackRow(dayName, snackIndex)}><Ionicons name="trash-outline" size={22} color={theme.textSecondary} /></TouchableOpacity>}</View></View>{activeOptions?.key === `${dayName}-${mealType}-${snackIndex}` || activeOptions?.key === `${dayName}-${mealType}` ? ( <View style={styles.optionsContainer}>{isSuggesting ? <ActivityIndicator color={theme.primary} /> : activeOptions.options.length > 0 ? activeOptions.options.map(option => (<TouchableOpacity key={option.id} style={styles.optionButton} onPress={() => handleOptionSelect(option)}><Text style={styles.optionText}>{option.name.replace(/^Recipe: /i, '')}</Text><Text style={styles.optionCalories}>{Math.round(option.nutrition.calories)} kcal</Text></TouchableOpacity>)) : <Text style={styles.noOptionsText}>No matching options found.</Text>}</View> ) : null}</View> );};
 const DayCard = ({ date, dayPlan, ...props }) => { const dayName = date.format('dddd'); return ( <View style={props.styles.card}><Text style={props.styles.dayTitle}>{dayName} <Text style={props.styles.dateSubtext}>{date.format('MMM Do')}</Text></Text><EditableMealRow date={date} dayPlan={dayPlan} mealType="breakfast" {...props} /><EditableMealRow date={date} dayPlan={dayPlan} mealType="lunch" {...props} /><EditableMealRow date={date} dayPlan={dayPlan} mealType="dinner" {...props} />{(dayPlan.snacks || []).map((_, index) => <EditableMealRow key={`${date.format('YYYYMMDD')}-snack-${index}`} date={date} dayPlan={dayPlan} mealType="snack" snackIndex={index} {...props} />)}<TouchableOpacity style={props.styles.addSnackButton} onPress={() => props.onAddSnack(dayName)}><Ionicons name="add-outline" size={20} color={props.theme.primary}/><Text style={props.styles.addSnackButtonText}>Add Snack</Text></TouchableOpacity></View> );};
-const SettingsModal = ({ isVisible, onClose, mealSettings, onSaveSettings, styles, theme }) => { const [timePicker, setTimePicker] = useState<{ visible: boolean, type: 'breakfast' | 'lunch' | 'dinner' | null }>({ visible: false, type: null }); const handleTimeChange = (event, selectedDate) => { const currentPickerType = timePicker.type; setTimePicker({ visible: Platform.OS === 'ios', type: currentPickerType }); if (event.type === 'dismissed') { setTimePicker({ visible: false, type: null }); return; } if (selectedDate && currentPickerType) { const newTime = moment(selectedDate).format('HH:mm'); onSaveSettings(currentSettings => ({ ...currentSettings, mealTimes: { ...currentSettings.mealTimes, [currentPickerType]: newTime, } })); } if (Platform.OS !== 'ios') { setTimePicker({ visible: false, type: null }); } }; if (!mealSettings) { return null; } return ( <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}><View style={styles.modalBackdrop}><View style={styles.modalContainer}><ScrollView><Text style={styles.modalTitle}>Settings</Text><View style={styles.settingSection}><Text style={styles.settingTitle}>Display Options</Text><View style={styles.settingRow}><Text style={styles.formLabel}>Show Weight Tracker</Text><Switch value={mealSettings.showWeightTracker ?? true} onValueChange={value => onSaveSettings(s => ({...s, showWeightTracker: value}))} trackColor={{ false: theme.border, true: theme.primary }} thumbColor={mealSettings.showWeightTracker ? theme.white : theme.surface} /></View><View style={styles.settingRow}><Text style={styles.formLabel}>Show Shopping List</Text><Switch value={mealSettings.showShoppingList ?? true} onValueChange={value => onSaveSettings(s => ({...s, showShoppingList: value}))} trackColor={{ false: theme.border, true: theme.primary }} thumbColor={mealSettings.showShoppingList ? theme.white : theme.surface} /></View></View><View style={styles.settingSection}><Text style={styles.settingTitle}>Default Meal Times</Text><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Breakfast</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'breakfast' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.breakfast}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Lunch</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'lunch' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.lunch}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Dinner</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'dinner' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.dinner}</Text></TouchableOpacity></View></View>{timePicker.visible && ( <View><DateTimePicker value={moment(mealSettings.mealTimes[timePicker.type], 'HH:mm').toDate()} mode="time" is24Hour={true} display="spinner" onChange={handleTimeChange} /><>{Platform.OS === 'ios' && <TouchableOpacity style={styles.iosPickerDoneButton} onPress={()=>setTimePicker({visible: false, type: null})}><Text style={styles.iosPickerDoneButtonText}>Done</Text></TouchableOpacity>}</></View> )}<View style={styles.settingSection}><Text style={styles.settingTitle}>Dietary Preferences</Text><View style={styles.preferenceContainer}>{preferenceOptions.map(option => (<TouchableOpacity key={option} style={[styles.preferenceButton, mealSettings.preferences.includes(option) && styles.preferenceButtonActive]} onPress={() => onSaveSettings(settings => ({...settings, preferences: settings.preferences.includes(option) ? settings.preferences.filter(p => p !== option) : [...settings.preferences, option]}))}><Text style={[styles.preferenceText, mealSettings.preferences.includes(option) && styles.preferenceTextActive]}>{option.charAt(0).toUpperCase() + option.slice(1)}</Text></TouchableOpacity>))}</View></View><View><Text style={styles.settingTitle}>Allergies & Intolerances</Text><TextInput placeholder="e.g., Peanut, Dairy, Gluten" style={styles.input} defaultValue={mealSettings.allergies.join(', ')} onEndEditing={(e) => onSaveSettings(settings => ({...settings, allergies: e.nativeEvent.text.split(",").map((a) => a.trim()).filter(Boolean)}))} placeholderTextColor={theme.textSecondary} /></View><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={onClose}><Text style={styles.modalButtonText}>Done</Text></TouchableOpacity></View></ScrollView></View></View></Modal> );};
+const SettingsModal = ({ isVisible, onClose, mealSettings, onSaveSettings, onResetPlan, styles, theme }) => { const [timePicker, setTimePicker] = useState<{ visible: boolean, type: 'breakfast' | 'lunch' | 'dinner' | 'snack' | null }>({ visible: false, type: null }); const handleTimeChange = (event, selectedDate) => { const currentPickerType = timePicker.type; setTimePicker({ visible: Platform.OS === 'ios', type: currentPickerType }); if (event.type === 'dismissed') { setTimePicker({ visible: false, type: null }); return; } if (selectedDate && currentPickerType) { const newTime = moment(selectedDate).format('HH:mm'); onSaveSettings(currentSettings => ({ ...currentSettings, mealTimes: { ...currentSettings.mealTimes, [currentPickerType]: newTime, } })); } if (Platform.OS !== 'ios') { setTimePicker({ visible: false, type: null }); } }; if (!mealSettings) { return null; } return ( <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}><View style={styles.modalBackdrop}><View style={styles.modalContainer}><ScrollView><Text style={styles.modalTitle}>Settings</Text><View style={styles.settingSection}><Text style={styles.settingTitle}>Display Options</Text><View style={styles.settingRow}><Text style={styles.formLabel}>Show Weight Tracker</Text><Switch value={mealSettings.showWeightTracker ?? true} onValueChange={value => onSaveSettings(s => ({...s, showWeightTracker: value}))} trackColor={{ false: theme.border, true: theme.primary }} thumbColor={mealSettings.showWeightTracker ? theme.white : theme.surface} /></View><View style={styles.settingRow}><Text style={styles.formLabel}>Show Shopping List</Text><Switch value={mealSettings.showShoppingList ?? true} onValueChange={value => onSaveSettings(s => ({...s, showShoppingList: value}))} trackColor={{ false: theme.border, true: theme.primary }} thumbColor={mealSettings.showShoppingList ? theme.white : theme.surface} /></View></View><View style={styles.settingSection}><Text style={styles.settingTitle}>Default Meal Times</Text><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Breakfast</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'breakfast' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.breakfast}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Lunch</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'lunch' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.lunch}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Dinner</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'dinner' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.dinner}</Text></TouchableOpacity></View><View style={styles.timeSettingRow}><Text style={styles.formLabel}>Snack</Text><TouchableOpacity onPress={() => setTimePicker({ visible: true, type: 'snack' })}><Text style={styles.timeValue}>{mealSettings.mealTimes.snack}</Text></TouchableOpacity></View></View>{timePicker.visible && ( <View><DateTimePicker value={moment(mealSettings.mealTimes[timePicker.type], 'HH:mm').toDate()} mode="time" is24Hour={true} display="spinner" onChange={handleTimeChange} /><>{Platform.OS === 'ios' && <TouchableOpacity style={styles.iosPickerDoneButton} onPress={()=>setTimePicker({visible: false, type: null})}><Text style={styles.iosPickerDoneButtonText}>Done</Text></TouchableOpacity>}</></View> )}<View style={styles.settingSection}><Text style={styles.settingTitle}>Dietary Preferences</Text><View style={styles.preferenceContainer}>{preferenceOptions.map(option => (<TouchableOpacity key={option} style={[styles.preferenceButton, mealSettings.preferences.includes(option) && styles.preferenceButtonActive]} onPress={() => onSaveSettings(settings => ({...settings, preferences: settings.preferences.includes(option) ? settings.preferences.filter(p => p !== option) : [...settings.preferences, option]}))}><Text style={[styles.preferenceText, mealSettings.preferences.includes(option) && styles.preferenceTextActive]}>{option.charAt(0).toUpperCase() + option.slice(1)}</Text></TouchableOpacity>))}</View></View><View style={styles.settingSection}><Text style={styles.settingTitle}>Allergies & Intolerances</Text><TextInput placeholder="e.g., Peanut, Dairy, Gluten" style={styles.input} defaultValue={mealSettings.allergies.join(', ')} onEndEditing={(e) => onSaveSettings(settings => ({...settings, allergies: e.nativeEvent.text.split(",").map((a) => a.trim()).filter(Boolean)}))} placeholderTextColor={theme.textSecondary} /></View><View style={styles.settingSection}><Text style={styles.settingTitle}>Data Management</Text><TouchableOpacity style={styles.resetButton} onPress={onResetPlan}><Ionicons name="refresh-outline" size={20} color={theme.white} /><Text style={styles.resetText}>Reset Full Plan & Logs</Text></TouchableOpacity></View><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={onClose}><Text style={styles.modalButtonText}>Done</Text></TouchableOpacity></View></ScrollView></View></View></Modal> );};
 const LogMealModal = ({ isVisible, onClose, onSubmit, mealType, isParsing, styles, theme, placeholder = "e.g., 2 eggs, 1 slice of toast, and a coffee" }) => { const [text, setText] = useState(""); const title = mealType ? `Log ${mealType.charAt(0).toUpperCase() + mealType.slice(1)}` : "Log Item"; const handleSubmit = () => { if (text.trim().length > 0) { onSubmit(text); setText(""); } }; return ( <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalBackdrop}><View style={styles.modalContainer}><Text style={styles.modalTitle}>{title}</Text><Text style={styles.formLabel}>What did you have?</Text><TextInput style={[styles.input, styles.textArea]} placeholder={placeholder} multiline value={text} onChangeText={setText} placeholderTextColor={theme.textSecondary} /><View style={styles.modalButtonRow}><TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={onClose} disabled={isParsing}><Text style={styles.cancelButtonText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={handleSubmit} disabled={isParsing}>{isParsing ? (<ActivityIndicator color={styles.modalButtonText.color} />) : (<Text style={styles.modalButtonText}>Calculate & Log</Text>)}</TouchableOpacity></View></View></KeyboardAvoidingView></Modal> ); };
 const DrinksTrackerCard = ({ drinks, onAddDrink, onRemoveDrink, onLogCustom, styles, theme }) => { const [isExpanded, setIsExpanded] = useState(true); const commonDrinks = [ { type: 'coffee', name: 'Coffee', icon: 'cafe-outline' as const }, { type: 'tea', name: 'Tea', icon: 'leaf-outline' as const }, { type: 'smoothie', name: 'Smoothie', icon: 'nutrition-outline' as const }, ]; const getDrinkIcon = (drink) => { if (drink.type === 'custom' && drink.name.toLowerCase().includes('beer')) return 'beer'; if (drink.type === 'custom' && (drink.name.toLowerCase().includes('vodka') || drink.name.toLowerCase().includes('gin') || drink.name.toLowerCase().includes('wine'))) return 'wine'; return drink.type === 'coffee' ? 'cafe' : drink.type === 'tea' ? 'leaf' : 'nutrition'; }; return ( <View style={styles.card}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}><Ionicons name="water-outline" size={22} color={theme.textPrimary} /> Drinks Tracker</Text><TouchableOpacity style={styles.cardActionIcon} onPress={() => setIsExpanded(!isExpanded)}><Ionicons name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} size={24} color={theme.textSecondary} /></TouchableOpacity></View>{isExpanded && ( <View><View style={styles.drinksListContainer}>{drinks.map((drink) => ( <View key={drink.id} style={styles.drinkRow}><Ionicons name={getDrinkIcon(drink)} size={24} color={drink.type === 'custom' ? '#c0392b' : theme.textSecondary} /><View style={styles.drinkInfo}><Text style={styles.drinkName}>{drink.name}</Text>{drink.nutrition && <Text style={styles.drinkCalories}>{drink.nutrition.calories} kcal</Text>}</View><TouchableOpacity onPress={() => onRemoveDrink(drink.id)} style={styles.actionButton}><Ionicons name="trash-outline" size={22} color={theme.textSecondary} /></TouchableOpacity></View> ))}{drinks.length === 0 && <Text style={styles.placeholderText}>No drinks logged today.</Text>}</View><View style={styles.addDrinkContainer}><Text style={styles.addDrinkTitle}>Log a drink:</Text><View style={styles.addDrinkButtons}>{commonDrinks.map(drink => ( <TouchableOpacity key={drink.type} style={styles.drinkButton} onPress={() => onAddDrink(drink)}><Ionicons name={drink.icon} size={24} color={theme.primary} /><Text style={styles.drinkButtonText}>{drink.name}</Text></TouchableOpacity> ))}<TouchableOpacity style={styles.drinkButton} onPress={onLogCustom}><Ionicons name="create-outline" size={24} color={theme.primary} /><Text style={styles.drinkButtonText}>Custom</Text></TouchableOpacity></View></View></View> )}</View> );};
 const WeightTrackerCard = ({ currentWeight, lastWeight, onLogWeight, unit, styles, theme }) => { const [isExpanded, setIsExpanded] = useState(true); const [weightInput, setWeightInput] = useState(''); useEffect(() => { setWeightInput(''); }, [currentWeight]); const handleLog = () => { if (weightInput && !isNaN(parseFloat(weightInput))) { onLogWeight(parseFloat(weightInput)); setWeightInput(''); } else { Alert.alert("Invalid Input", "Please enter a valid number for the weight."); } }; const change = currentWeight && lastWeight ? currentWeight.weight - lastWeight.weight : 0; const changeText = change !== 0 ? `${change > 0 ? '+' : ''}${change.toFixed(1)} ${unit}` : 'No change'; const changeColor = change > 0 ? '#e74c3c' : change < 0 ? '#28a745' : theme.textSecondary; return ( <View style={styles.card}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}><Ionicons name="scale-outline" size={22} color={theme.textPrimary} /> Weight Tracker</Text><TouchableOpacity style={styles.cardActionIcon} onPress={() => setIsExpanded(!isExpanded)}><Ionicons name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} size={24} color={theme.textSecondary} /></TouchableOpacity></View>{isExpanded && ( <View><View style={styles.weightDisplayRow}><View style={styles.weightDisplayItem}><Text style={styles.weightValue}>{currentWeight ? currentWeight.weight.toFixed(1) : '-.-'}</Text><Text style={styles.weightLabel}>Current ({unit})</Text></View><View style={styles.weightDisplayItem}><Text style={[styles.weightValue, { color: changeColor }]}>{lastWeight && currentWeight ? changeText : '-'}</Text><Text style={styles.weightLabel}>Change</Text></View></View><View style={styles.logWeightContainer}><TextInput style={styles.addItemInput} placeholder={`Log today's weight in ${unit}`} value={weightInput} onChangeText={setWeightInput} keyboardType="numeric" onSubmitEditing={handleLog} placeholderTextColor={theme.textSecondary} /><TouchableOpacity style={styles.addItemButton} onPress={handleLog}><Ionicons name="add-circle" size={32} color={theme.primary} /></TouchableOpacity></View></View> )}</View> );};
@@ -227,7 +72,7 @@ export default function MealPlanner() {
   const navigation = useNavigation();
   const { mealSettings: initialMealSettings, saveMealSettings, isLoading } = useWellaura();
   const { theme } = useTheme();
-  const { favorites, toggleFavorite } = useFavorites();
+  const { favorites } = useFavorites();
   const { localMealPlan, setLocalMealPlan, allMeals, addMealToCache, updateMeal, updateSnack } = useMealPlan();
   const styles = getDynamicStyles(theme);
 
@@ -254,15 +99,47 @@ export default function MealPlanner() {
 
   const findMealById = useCallback((id: string): Meal | undefined => allMeals.find(m => m.id === id), [allMeals]);
   
-  const handleAddSnack = (day: string) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); if (!newPlan[day].snacks) newPlan[day].snacks = []; newPlan[day].snacks.push({name: "", time: "15:00", servings: 1}); return newPlan; }); };
+  const handleAddSnack = (day: string) => { setLocalMealPlan(plan => { const newPlan = JSON.parse(JSON.stringify(plan)); if (!newPlan[day].snacks) newPlan[day].snacks = []; newPlan[day].snacks.push({name: "", id: '', time: "15:00", servings: 1}); return newPlan; }); };
   const getMealOptions = useCallback(async (mealType: string, count: number = 3): Promise<Meal[]> => {
-    const meals = await fetchRandomRecipes(localMealSettings, count);
+    const meals = await fetchRandomRecipes(localMealSettings, count, mealType);
     meals.forEach(meal => addMealToCache(meal));
     return meals;
   }, [localMealSettings, addMealToCache]);
   const handleOpenLogModal = (date: moment.Moment, type: Meal['type'], snackIndex?: number) => { setMealToLog({ date, type, snackIndex }); setLogMealModalVisible(true); };
   const handleLogToggle = (date: moment.Moment, mealType: Meal['type'], snackIndex?: number) => { const dateString = date.format('YYYY-MM-DD'); setLoggedMeals(currentLogs => { const newLogs = JSON.parse(JSON.stringify(currentLogs)); const dayLog = newLogs[dateString] || { breakfast: false, lunch: false, dinner: false, snacks: [] }; if (mealType === 'snack' && snackIndex !== undefined) { if(!dayLog.snacks) dayLog.snacks = []; dayLog.snacks[snackIndex] = !dayLog.snacks[snackIndex]; } else if (mealType !== 'snack') { dayLog[mealType] = !dayLog[mealType]; } newLogs[dateString] = dayLog; return newLogs; }); };
-  const handleLogFromText = async (text: string) => { if (!mealToLog) return; setIsParsing(true); try { const parsedData = await parseAndFetchNutrition(text); const uniqueName = `${parsedData.name} - ${Date.now()}`; const newMealObject: Meal = { ...parsedData, id: `custom_${Date.now()}`, name: uniqueName, type: mealToLog.type, tags: ['logged', 'custom'], }; addMealToCache(newMealObject); const dayName = mealToLog.date.format('dddd'); if (mealToLog.type === 'snack' && mealToLog.snackIndex !== undefined) { updateSnack(dayName, mealToLog.snackIndex, newMealObject.name, newMealObject.id); } else { updateMeal(dayName, mealToLog.type, newMealObject); } handleLogToggle(mealToLog.date, mealToLog.type, mealToLog.snackIndex); } catch (error) { Alert.alert("Calculation Failed", "Couldn't determine nutrition. Please try again."); } finally { setIsParsing(false); setLogMealModalVisible(false); setMealToLog(null); } };
+  
+  const handleLogFromText = async (text: string) => {
+    if (!mealToLog) return;
+    setIsParsing(true);
+    try {
+      const parsedData = await parseAndFetchNutrition(text);
+      const newMealObject: Meal = {
+        id: `custom_${Date.now()}`,
+        name: parsedData.name || "Logged Meal",
+        type: mealToLog.type,
+        tags: ['logged', 'custom'],
+        image: '',
+        nutrition: parsedData.nutrition || { calories: 0, protein: 0, carbs: 0, fat: 0 },
+        ingredients: parsedData.ingredients || [],
+        recipe: parsedData.recipe || '',
+      };
+      addMealToCache(newMealObject);
+      const dayName = mealToLog.date.format('dddd');
+      if (mealToLog.type === 'snack' && mealToLog.snackIndex !== undefined) {
+        updateSnack(dayName, mealToLog.snackIndex, newMealObject.name, newMealObject.id);
+      } else {
+        updateMeal(dayName, mealToLog.type as any, newMealObject);
+      }
+      handleLogToggle(mealToLog.date, mealToLog.type, mealToLog.snackIndex);
+    } catch (error) {
+      Alert.alert("Calculation Failed", "Couldn't determine nutrition. Please try again.");
+    } finally {
+      setIsParsing(false);
+      setLogMealModalVisible(false);
+      setMealToLog(null);
+    }
+  };
+
   const handleAddDrink = (drink: {type: string, name: string}) => { const dateString = currentDate.format('YYYY-MM-DD'); setLoggedDrinks(currentDrinks => { const todayDrinks = currentDrinks[dateString] || []; const newDrink = { ...drink, id: Date.now() }; return { ...currentDrinks, [dateString]: [...todayDrinks, newDrink] }; }); };
   const handleLogCustomDrink = async (text: string) => { setIsParsing(true); try { const parsedData = await parseAndFetchNutrition(text); const newDrink = { id: Date.now(), type: 'custom', name: parsedData.name, nutrition: parsedData.nutrition, }; const dateString = currentDate.format('YYYY-MM-DD'); setLoggedDrinks(currentDrinks => { const todayDrinks = currentDrinks[dateString] || []; return { ...currentDrinks, [dateString]: [...todayDrinks, newDrink] }; }); } catch (error) { Alert.alert("Calculation Failed", "Couldn't determine nutrition for the drink."); } finally { setIsParsing(false); setLogDrinkModalVisible(false); } };
   const handleRemoveDrink = (drinkId: number) => { const dateString = currentDate.format('YYYY-MM-DD'); setLoggedDrinks(currentDrinks => { const todayDrinks = currentDrinks[dateString] || []; return { ...currentDrinks, [dateString]: todayDrinks.filter(d => d.id !== drinkId) }; }); };
@@ -271,7 +148,7 @@ export default function MealPlanner() {
   const handleNextDay = () => setCurrentDate(currentDate.clone().add(1, 'day'));
   const handleOpenMealModal = async (mealSummary, date, mealType, snackIndex) => {
       let fullMealDetails = findMealById(mealSummary.id);
-      if (!fullMealDetails?.recipe || fullMealDetails.recipe === 'No instructions provided.') {
+      if (!fullMealDetails?.recipe || !fullMealDetails.recipe.startsWith('http')) {
           const fetchedMeal = await getRecipeDetails(mealSummary.id);
           if (fetchedMeal) {
               addMealToCache(fetchedMeal);
@@ -367,7 +244,7 @@ export default function MealPlanner() {
         mealData.ingredients.forEach(ing => {
             if (typeof ing === 'object' && ing.hasOwnProperty('baseQuantity')) {
                 const key = `${ing.name}|${ing.unit}`;
-                const quantity = ing.perPerson ? ing.baseQuantity * mealServings : ing.baseQuantity;
+                const quantity = ing.perPerson ? ing.baseQuantity * servings : ing.baseQuantity;
                 ingredientMap[key] = (ingredientMap[key] || 0) + quantity;
             }
         });
@@ -397,7 +274,11 @@ export default function MealPlanner() {
 
   const dayCardProps = { findMealById, addMealToCache, onAddLogEntry: handleOpenLogModal, onClearMeal: () => {}, onDeleteSnackRow: () => {}, onLogToggle: handleLogToggle, onSuggestMeal: getMealOptions, onSelectMeal: handleOpenMealModal, onUpdateMeal: updateMeal, onUpdateSnack: updateSnack, onAddSnack: handleAddSnack, styles, theme, loggedStatus: loggedMeals };
   const renderSwipeRightActions = () => ( <View style={styles.swipeActionContainer}><Ionicons name={isCheatDay ? "refresh-circle" : "bonfire"} size={30} color={theme.white} /><Text style={styles.swipeActionText}>{isCheatDay ? 'Undo' : 'Cheat Day'}</Text></View> );
-
+  const gestureConfig = {
+    velocityThreshold: 0.3,
+    directionalOffsetThreshold: 80,
+  };
+  
   return (
     <View style={styles.container}>
       <SettingsModal isVisible={settingsModalVisible} onClose={() => setSettingsModalVisible(false)} mealSettings={localMealSettings} onSaveSettings={setLocalMealSettings} styles={styles} theme={theme} />
@@ -424,27 +305,33 @@ export default function MealPlanner() {
       <View style={styles.headerContainer}>
         <View><Text style={styles.headerTitle}>Your Daily Log</Text><Text style={styles.headerSubtitle}>Plan and track one day at a time</Text></View>
         <View style={styles.headerActionsContainer}>
-            <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('recipes', { mealSettings: localMealSettings, allMeals })}><Ionicons name="book-outline" size={26} color={theme.textPrimary} /></TouchableOpacity>
-            <HeaderMenu onOpenCalendar={() => navigation.navigate('monthlymealview', { monthlyTotals: allDaysTotals, cheatDays, mealPlan: localMealPlan, loggedMeals, loggedDrinks, allMeals })} onOpenOverview={() => navigation.navigate('weeklymealview', { weekDates, mealPlan: localMealPlan, mealSettings: localMealSettings, loggedStatus: loggedMeals, allMeals, findMealById, onUpdateMeal, onUpdateSnack, onAddSnack, onLogToggle, onSuggestMeal: getMealOptions, onSelectMeal: handleOpenMealModal, })} onOpenSettings={() => setSettingsModalVisible(true)} styles={styles} theme={theme}/>
+            <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('recipes', { mealSettings: localMealSettings })}><Ionicons name="book-outline" size={26} color={theme.textPrimary} /></TouchableOpacity>
+            <HeaderMenu onOpenCalendar={() => navigation.navigate('monthlymealview', { monthlyTotals: allDaysTotals, cheatDays, mealPlan: localMealPlan, loggedMeals, loggedDrinks, allMeals, findMealById })} onOpenOverview={() => navigation.navigate('weeklymealview', { weekDates, mealPlan: localMealPlan, mealSettings: localMealSettings, loggedStatus: loggedMeals, allMeals, findMealById, onSuggestMeal: getMealOptions, onSelectMeal: handleOpenMealModal, })} onOpenSettings={() => setSettingsModalVisible(true)} styles={styles} theme={theme}/>
         </View>
       </View>
       
       <View style={styles.dateNavigator}><TouchableOpacity onPress={handlePrevDay} style={styles.navButton}><Ionicons name="chevron-back-outline" size={24} color={theme.primary} /></TouchableOpacity><TouchableOpacity onPress={() => setDatePickerVisible(true)}><Text style={styles.dateDisplayText}>{currentDate.isSame(moment(), 'day') ? "Today" : currentDate.format('MMM Do, YYYY')}</Text></TouchableOpacity><TouchableOpacity onPress={handleNextDay} style={styles.navButton}><Ionicons name="chevron-forward-outline" size={24} color={theme.primary} /></TouchableOpacity></View>
       
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Swipeable renderRightActions={renderSwipeRightActions}><View style={[styles.card, isCheatDay && styles.cheatDayCard]}><Text style={styles.cardTitle}><Ionicons name={isCheatDay ? "bonfire-outline" : "today-outline"} size={22} color={theme.textPrimary} /> {currentDate.isSame(moment(), 'day') ? "Today's" : `${currentDate.format("dddd['s]")}`} Nutrition</Text><Text style={styles.weeklyCalories}>{Math.round(dailyLoggedTotals.calories)} / {Math.round(dailyPlannedTotals.calories)} kcal Logged</Text><NutritionBar label="Protein" loggedValue={dailyLoggedTotals.protein} plannedValue={dailyPlannedTotals.protein} totalCalories={dailyPlannedTotals.calories} color="#3498db" styles={styles} /><NutritionBar label="Carbs"  loggedValue={dailyLoggedTotals.carbs} plannedValue={dailyPlannedTotals.carbs} totalCalories={dailyPlannedTotals.calories} color="#f1c40f" styles={styles} /><NutritionBar label="Fat" loggedValue={dailyLoggedTotals.fat} plannedValue={dailyPlannedTotals.fat} totalCalories={dailyPlannedTotals.calories} color="#e74c3c" styles={styles} /></View></Swipeable>
-        <DayCard date={currentDate} dayPlan={localMealPlan[currentDate.format('dddd')]} {...dayCardProps} />
-        <DrinksTrackerCard drinks={dailyLoggedDrinks} onAddDrink={handleAddDrink} onRemoveDrink={handleRemoveDrink} onLogCustom={() => setLogDrinkModalVisible(true)} styles={styles} theme={theme} />
-        {showWeightTracker && <WeightTrackerCard currentWeight={currentWeight} lastWeight={lastWeight} onLogWeight={handleLogWeight} unit={weightUnit} styles={styles} theme={theme} />}
-        {showShoppingList && <ShoppingListCard list={dailyShoppingList} clearedItems={dailyClearedItems} onAcquireItem={handleAcquireItem} onUnacquireItem={handleUnacquireItem} onAddCustomItem={handleAddCustomItem} onClearHistory={handleClearShoppingHistory} title="Today's Shopping List" styles={styles} theme={theme} />}
-        <TouchableOpacity style={styles.resetButton}><Ionicons name="refresh-outline" size={20} color={theme.white} /><Text style={styles.resetText}>Reset Full Plan & Logs</Text></TouchableOpacity>
-      </ScrollView>
+      <GestureRecognizer
+        onSwipeLeft={handleNextDay}
+        onSwipeRight={handlePrevDay}
+        config={gestureConfig}
+        style={{ flex: 1 }}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContainer}>
+            <Swipeable renderRightActions={renderSwipeRightActions}><View style={[styles.card, isCheatDay && styles.cheatDayCard]}><Text style={styles.cardTitle}><Ionicons name={isCheatDay ? "bonfire-outline" : "today-outline"} size={22} color={theme.textPrimary} /> {currentDate.isSame(moment(), 'day') ? "Today's" : `${currentDate.format("dddd['s]")}`} Nutrition</Text><Text style={styles.weeklyCalories}>{Math.round(dailyLoggedTotals.calories)} / {Math.round(dailyPlannedTotals.calories)} kcal Logged</Text><NutritionBar label="Protein" loggedValue={dailyLoggedTotals.protein} plannedValue={dailyPlannedTotals.protein} totalCalories={dailyPlannedTotals.calories} color="#3498db" styles={styles} /><NutritionBar label="Carbs"  loggedValue={dailyLoggedTotals.carbs} plannedValue={dailyPlannedTotals.carbs} totalCalories={dailyPlannedTotals.calories} color="#f1c40f" styles={styles} /><NutritionBar label="Fat" loggedValue={dailyLoggedTotals.fat} plannedValue={dailyPlannedTotals.fat} totalCalories={dailyPlannedTotals.calories} color="#e74c3c" styles={styles} /></View></Swipeable>
+            <DayCard date={currentDate} dayPlan={localMealPlan[currentDate.format('dddd')]} {...dayCardProps} />
+            <DrinksTrackerCard drinks={dailyLoggedDrinks} onAddDrink={handleAddDrink} onRemoveDrink={handleRemoveDrink} onLogCustom={() => setLogDrinkModalVisible(true)} styles={styles} theme={theme} />
+            {showWeightTracker && <WeightTrackerCard currentWeight={currentWeight} lastWeight={lastWeight} onLogWeight={handleLogWeight} unit={weightUnit} styles={styles} theme={theme} />}
+            {showShoppingList && <ShoppingListCard list={dailyShoppingList} clearedItems={dailyClearedItems} onAcquireItem={handleAcquireItem} onUnacquireItem={handleUnacquireItem} onAddCustomItem={handleAddCustomItem} onClearHistory={handleClearShoppingHistory} title="Today's Shopping List" styles={styles} theme={theme} />}
+        </ScrollView>
+      </GestureRecognizer>
     </View>
   );
 }
 
 // --- UTILITY FUNCTIONS ---
-const formatRecipe = (recipe, ingredients, servings) => { if (!recipe) return "No instructions provided."; if (!ingredients || ingredients.length === 0) { return recipe; } let formatted = recipe; ingredients.forEach(ing => { if (typeof ing === 'object' && ing.hasOwnProperty('baseQuantity')) { const quantity = ing.perPerson ? ing.baseQuantity * servings : ing.baseQuantity; const formattedQuantity = Number.isInteger(quantity) ? quantity : quantity.toFixed(2).replace(/\.?0+$/, ""); const replacement = `${formattedQuantity}${ing.unit !== 'whole' && ing.unit ? ` ${ing.unit}` : ''}`; formatted = formatted.replace(new RegExp(`{{${ing.name}}}`, 'g'), replacement); } }); return formatted; };
+const formatRecipe = (recipe, ingredients, servings) => { if (!recipe) return "No instructions provided."; if (!ingredients || ingredients.length === 0) { return recipe; } let formatted = recipe; ingredients.forEach(ing => { if (typeof ing === 'object' && ing.hasOwnProperty('baseQuantity')) { const quantity = ing.perPerson ? ing.baseQuantity * servings : ing.baseQuantity; const formattedQuantity = Number.isInteger(quantity) ? quantity : quantity.toFixed(2).replace(/\.?0+$/, ""); const replacement = `${formattedQuantity}${ing.unit !== 'whole' ? ` ${ing.unit}` : ''}`; formatted = formatted.replace(new RegExp(`{{${ing.name}}}`, 'g'), replacement); } }); return formatted; };
 
 // --- FULL STYLESHEET ---
 const getDynamicStyles = (theme) => {
@@ -529,7 +416,7 @@ const getDynamicStyles = (theme) => {
       swipeActionContainer: { backgroundColor: destructiveColor, justifyContent: 'center', alignItems: 'center', width: 100 },
       swipeActionText: { color: theme.white, fontWeight: '600', marginTop: 5 },
       cheatDayCard: { borderColor: destructiveColor, borderWidth: 2 },
-      resetButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: destructiveColor, paddingVertical: 15, borderRadius: 15, marginTop: 10, marginHorizontal: 20, shadowColor: destructiveColor, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6, },
+      resetButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: destructiveColor, paddingVertical: 15, borderRadius: 15, marginTop: 10 },
       resetText: { fontSize: 16, fontWeight: "bold", color: theme.white, marginLeft: 10, },
       shoppingListContainer: { paddingTop: 10 },
       shoppingListItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, },

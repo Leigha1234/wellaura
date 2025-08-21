@@ -1,7 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import {
-  DateTimePickerEvent,
-} from "@react-native-community/datetimepicker";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import moment from "moment";
 import React, {
@@ -18,7 +16,6 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
-  LayoutAnimation,
   Modal,
   Platform,
   SafeAreaView,
@@ -30,13 +27,14 @@ import {
   UIManager,
   View
 } from "react-native";
-import { Calendar, DateData, DotProps } from "react-native-calendars";
+import { Calendar, DateData } from "react-native-calendars";
 import {
   Directions,
   FlingGestureHandler,
   State,
 } from "react-native-gesture-handler";
-import tinycolor from "tinycolor2"; // <-- This was the missing import
+import tinycolor from "tinycolor2";
+import { useMealPlan } from "../../../app/context/MealPlanContext"; // 1. Import the meal plan context
 import { useTheme } from "../../../app/context/ThemeContext";
 import { useWellaura } from "../../WellauraContext";
 import { CalendarEvent } from "../../types";
@@ -120,7 +118,7 @@ const DayView = ({ date, events, onTimeSlotPress, onEventPress, styles, theme })
         <View style={styles.allDayContainer}>
           {allDayEvents.map((event) => (
             <TouchableOpacity key={event.id} style={[styles.allDayEvent, { backgroundColor: event.color }]} onPress={() => onEventPress(event)}>
-              <Text style={[styles.allDayEventText, { color: tinycolor(event.color).isDark() ? theme.white : theme.textPrimary }]}>{event.title}</Text>
+              <Text style={[styles.allDayEventText, { color: tinycolor(event.color || '#ffffff').isDark() ? theme.white : theme.textPrimary }]}>{event.title}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -132,25 +130,24 @@ const DayView = ({ date, events, onTimeSlotPress, onEventPress, styles, theme })
             <View style={styles.hourLine} />
           </TouchableOpacity>
         ))}
-        <CurrentTimeIndicator isVisible={isToday} styles={styles} />
-        {timedEvents.map((event) => {
-          const startMoment = moment(event.start);
-          const endMoment = moment(event.end);
-          const top = (startMoment.hour() + startMoment.minute() / 60) * HOUR_HEIGHT;
-          const height = Math.max(20, (endMoment.diff(startMoment, "minutes") / 60) * HOUR_HEIGHT - 2);
-          const { left, width } = getLayout(event);
-          const isMeal = event.type === 'meal';
-          const isMindfulness = event.type === 'mindfulness';
-          const isHabit = event.type === 'habit';
-          const isPayment = event.type === 'payment';
-          const eventTextColor = tinycolor(event.color).isDark() ? theme.white : theme.textPrimary;
-          return (
-            <TouchableOpacity key={event.id} style={[styles.eventItem, { backgroundColor: event.color, top, height, left: `${left}%`, width: `${width}%` }, isMeal && styles.mealEventItem, isMindfulness && styles.mindfulnessEventItem, isHabit && styles.habitEventItem, isPayment && styles.paymentEventItem ]} onPress={() => onEventPress(event)}>
-              <Text style={[styles.eventTitle, {color: eventTextColor}, isMeal && styles.mealEventTitle, isMindfulness && styles.mindfulnessEventTitle, isHabit && styles.habitEventTitle, isPayment && styles.paymentEventTitle]} numberOfLines={1}>{event.title}</Text>
-              {height > 25 && (<Text style={[styles.eventTime, {color: eventTextColor, opacity: 0.8}, isMeal && styles.mealEventTime, isMindfulness && styles.mindfulnessEventTime, isHabit && styles.habitEventTime, isPayment && styles.paymentEventTime]} numberOfLines={1}>{startMoment.format("h:mm A")}</Text>)}
-            </TouchableOpacity>
-          );
-        })}
+        <View style={styles.eventsContainer}>
+            <CurrentTimeIndicator isVisible={isToday} styles={styles} />
+            {timedEvents.map((event) => {
+              const startMoment = moment(event.start);
+              const endMoment = moment(event.end);
+              const top = (startMoment.hour() + startMoment.minute() / 60) * HOUR_HEIGHT;
+              const height = Math.max(20, (endMoment.diff(startMoment, "minutes") / 60) * HOUR_HEIGHT - 2);
+              const { left, width } = getLayout(event);
+              const isMeal = event.type === 'meal';
+              const eventTextColor = tinycolor(event.color || '#ffffff').isDark() ? theme.white : theme.textPrimary;
+              return (
+                <TouchableOpacity key={event.id} style={[styles.eventItem, { backgroundColor: event.color, top, height, left: `${left}%`, width: `${width}%` }, isMeal && styles.mealEventItem ]} onPress={() => onEventPress(event)}>
+                  <Text style={[styles.eventTitle, {color: eventTextColor}, isMeal && styles.mealEventTitle]} numberOfLines={1}>{event.title}</Text>
+                  {height > 25 && (<Text style={[styles.eventTime, {color: eventTextColor, opacity: 0.8}, isMeal && styles.mealEventTime]} numberOfLines={1}>{startMoment.format("h:mm A")}</Text>)}
+                </TouchableOpacity>
+              );
+            })}
+        </View>
       </ScrollView>
     </View>
   );
@@ -181,28 +178,92 @@ const ToDoListView = ({ todos, setTodos, styles, theme }) => {
 const CalendarHeader = ({ currentMonth, viewMode, setViewMode, onNavigate, onToday, styles, theme }) => {
     const viewModeIcons: Record<ViewMode, keyof typeof Ionicons.glyphMap> = { month: 'calendar-outline', week: 'calendar-clear-outline', day: 'square-outline', todo: 'list-outline' };
     return (
-        <View style={styles.header}><View style={styles.headerNav}><View style={styles.headerTitleContainer}><Text style={styles.headerMonth}>{moment(currentMonth).format("MMMM YYYY")}</Text>{(viewMode === "week" || viewMode === "day") && (<View style={styles.arrowContainer}><TouchableOpacity onPress={() => onNavigate('prev')}><Ionicons name="chevron-back" size={24} color={theme.textPrimary} /></TouchableOpacity><TouchableOpacity onPress={() => onNavigate('next')}><Ionicons name="chevron-forward" size={24} color={theme.textPrimary} /></TouchableOpacity></View>)}</View><View style={styles.headerControls}><TouchableOpacity onPress={onToday} style={styles.todayButton}><Text style={styles.todayButtonText}>Today</Text></TouchableOpacity><View style={styles.viewModeContainer}>{(["month", "week", "day", "todo"] as ViewMode[]).map((mode) => (<TouchableOpacity key={mode} onPress={() => setViewMode(mode)} style={[styles.iconTab, viewMode === mode && styles.activeIconTab]}><Ionicons name={viewModeIcons[mode]} size={22} color={viewMode === mode ? theme.primary : theme.textSecondary} /></TouchableOpacity>))}</View></View></View></View>
+        <View style={styles.header}>
+            <View style={styles.headerNav}>
+                <View style={styles.headerTitleContainer}>
+                    <Text style={styles.headerMonth}>{moment(currentMonth).format("MMMM YYYY")}</Text>
+                </View>
+                <View style={styles.headerControls}>
+                    <TouchableOpacity onPress={onToday} style={styles.todayButton}>
+                        <Text style={styles.todayButtonText}>Today</Text>
+                    </TouchableOpacity>
+                    <View style={styles.viewModeContainer}>
+                        {(["month", "week", "day", "todo"] as ViewMode[]).map((mode) => (
+                            <TouchableOpacity key={mode} onPress={() => setViewMode(mode)} style={[styles.iconTab, viewMode === mode && styles.activeIconTab]}>
+                                <Ionicons name={viewModeIcons[mode]} size={22} color={viewMode === mode ? theme.primary : theme.textSecondary} />
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+            </View>
+        </View>
     );
 };
+
 type EventAction = | { type: 'SET_FIELD'; field: keyof CalendarEvent; payload: any } | { type: 'SET_EVENT'; payload: Partial<CalendarEvent> } | { type: 'RESET' };
 const eventReducer = (state: Partial<CalendarEvent>, action: EventAction): Partial<CalendarEvent> => { switch (action.type) { case 'SET_FIELD': return { ...state, [action.field]: action.payload }; case 'SET_EVENT': return { ...state, ...action.payload }; case 'RESET': return { ...initialEventState, start: new Date(), end: moment().add(1, 'hour').toDate() }; default: return state; } };
+
 const EventModal = ({ visible, onClose, onSave, initialEventData, styles }) => {
   const [eventState, dispatch] = useReducer(eventReducer, { ...initialEventState });
+  const { theme } = useTheme();
   const [showPicker, setShowPicker] = useState<"start-date" | "start-time" | "end-date" | "end-time" | null>(null);
-  useEffect(() => { dispatch({ type: "SET_EVENT", payload: initialEventData }); }, [initialEventData]);
-  const handleSave = () => { if (!eventState.title) { alert("Please add a title."); return; } const finalEvent = { ...initialEventState, ...eventState, id: eventState.id || `${Date.now()}-${eventState.title}`, type: 'event' } as CalendarEvent; onSave(finalEvent); onClose(); };
+  const colorScrollViewRef = useRef<ScrollView>(null);
+  const titleInputRef = useRef<TextInput>(null);
+
+  const themeColors = useMemo(() => [theme.primary || '#ffffff', theme.accent || '#ffffff', tinycolor(theme.primary || '#ffffff').saturate(50).toHexString(), tinycolor(theme.accent || '#ffffff').saturate(50).toHexString()], [theme]);
+  const allPresetColors = useMemo(() => [...new Set([...themeColors, ...PRESET_COLORS])], [themeColors]);
+
+  useEffect(() => {
+    const dataToUse = initialEventData || {};
+    const initialColor = dataToUse.color || initialEventState.color;
+    dispatch({ type: "SET_EVENT", payload: { ...initialEventState, ...dataToUse, color: initialColor }});
+    setTimeout(() => {
+      const initialColorIndex = allPresetColors.indexOf(initialColor);
+      if (initialColorIndex !== -1 && colorScrollViewRef.current) { colorScrollViewRef.current.scrollTo({ x: initialColorIndex * 48 - (styles.modalContainer.width * 0.5) + 24, animated: true }); }
+      titleInputRef.current?.focus();
+    }, 100);
+  }, [initialEventData, allPresetColors]);
+  
+  const handleSave = () => { if (!eventState.title) { Alert.alert("Please add a title."); return; } const finalEvent = { ...initialEventState, ...eventState, id: eventState.id || `${Date.now()}-${eventState.title}`, type: 'event' } as CalendarEvent; onSave(finalEvent); onClose(); };
+  const handleDelete = () => { Alert.alert( "Delete Event", "Are you sure you want to delete this event?", [ { text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => { onSave({ ...eventState, id: eventState.id, isDeleted: true }); onClose(); } }, ], { cancelable: true } ); };
   const handleDateTimeChange = (e: DateTimePickerEvent, date?: Date) => { const picker = showPicker; setShowPicker(null); if (e.type === 'dismissed' || !date) return; const field = picker?.includes('start') ? 'start' : 'end'; const current = moment(eventState[field]); const newMoment = moment(date); const newDate = picker?.includes('date') ? current.year(newMoment.year()).month(newMoment.month()).date(newMoment.date()).toDate() : current.hour(newMoment.hour()).minute(newMoment.minute()).toDate(); dispatch({ type: 'SET_FIELD', field, payload: newDate }); };
+  const toggleAllDay = () => { dispatch({ type: 'SET_FIELD', field: 'allDay', payload: !eventState.allDay }); };
+  const isEditing = !!eventState.id && eventState.id.length > 15;
+  const isAllDay = eventState.allDay;
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-        <View style={styles.modalOverlay}><View style={styles.modalContainer}><Text>Event Modal Content...</Text>{/* Full Modal JSX was removed for brevity, but would use styles prop */}</View></View>
-    </Modal>
+    <>
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}><TouchableOpacity onPress={onClose} style={styles.closeButton}><Ionicons name="close-circle-outline" size={32} color={theme.textSecondary} /></TouchableOpacity><Text style={styles.modalTitle}>{isEditing ? "Edit Event" : "Add Event"}</Text><TouchableOpacity onPress={handleSave} style={styles.saveButton}><Ionicons name="checkmark-circle-outline" size={32} color={theme.primary} /></TouchableOpacity></View>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 4 }}>
+              <View style={styles.inputGroup}><Text style={styles.label}>Title</Text><TextInput ref={titleInputRef} style={styles.textInput} placeholder="Add title" placeholderTextColor={theme.textSecondary} value={eventState.title} onChangeText={text => dispatch({ type: 'SET_FIELD', field: 'title', payload: text })} maxLength={100} /></View>
+              <View style={[styles.allDayContainer, { marginBottom: 12, paddingVertical: 0 }]}><Text style={styles.label}>All-day event</Text><TouchableOpacity onPress={toggleAllDay}><Ionicons name={isAllDay ? "toggle-sharp" : "toggle-outline"} size={36} color={isAllDay ? theme.primary : theme.textSecondary} /></TouchableOpacity></View>
+              {!isAllDay && (
+                <>
+                  <View style={styles.inputGroup}><Text style={styles.label}>Starts</Text><View style={styles.dateTimeRow}><TouchableOpacity onPress={() => setShowPicker("start-date")} style={styles.dateTimePicker}><Ionicons name="calendar-outline" size={20} color={theme.primary} /><Text style={styles.dateText}>{moment(eventState.start).format("ddd, MMM D, YYYY")}</Text></TouchableOpacity><TouchableOpacity onPress={() => setShowPicker("start-time")} style={styles.dateTimePicker}><Ionicons name="time-outline" size={20} color={theme.primary} /><Text style={styles.dateText}>{moment(eventState.start).format("h:mm A")}</Text></TouchableOpacity></View></View>
+                  <View style={styles.inputGroup}><Text style={styles.label}>Ends</Text><View style={styles.dateTimeRow}><TouchableOpacity onPress={() => setShowPicker("end-date")} style={styles.dateTimePicker}><Ionicons name="calendar-outline" size={20} color={theme.primary} /><Text style={styles.dateText}>{moment(eventState.end).format("ddd, MMM D, YYYY")}</Text></TouchableOpacity><TouchableOpacity onPress={() => setShowPicker("end-time")} style={styles.dateTimePicker}><Ionicons name="time-outline" size={20} color={theme.primary} /><Text style={styles.dateText}>{moment(eventState.end).format("h:mm A")}</Text></TouchableOpacity></View></View>
+                </>
+              )}
+              {showPicker && ( <DateTimePicker value={moment(eventState[showPicker.includes('start') ? 'start' : 'end']).toDate()} mode={showPicker.includes('date') ? "date" : "time"} display={Platform.OS === 'ios' ? "spinner" : "default"} onChange={handleDateTimeChange} /> )}
+              <View style={styles.colorPickerContainer}><Text style={styles.label}>Choose Color</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} ref={colorScrollViewRef} contentContainerStyle={{ paddingVertical: 4 }}>{allPresetColors.map(color => ( <TouchableOpacity key={color} style={[styles.colorOption, { backgroundColor: color, borderWidth: eventState.color === color ? 3 : 0 }]} onPress={() => dispatch({ type: 'SET_FIELD', field: 'color', payload: color })}/> ))}</ScrollView></View>
+              <View style={styles.inputGroup}><Text style={styles.label}>Notes (Optional)</Text><TextInput style={[styles.textInput, { height: 100, textAlignVertical: 'top' }]} placeholder="Add notes" placeholderTextColor={theme.textSecondary} value={eventState.notes} onChangeText={text => dispatch({ type: 'SET_FIELD', field: 'notes', payload: text })} multiline /></View>
+              {isEditing && ( <TouchableOpacity onPress={handleDelete} style={styles.deleteButtonContainer}><Ionicons name="trash-outline" size={24} color={theme.error} /><Text style={[styles.deleteButtonText, { color: theme.error }]}>Delete Event</Text></TouchableOpacity> )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </>
   );
 };
+
 
 // --- Main Calendar Page Component ---
 export default function CalendarPage() {
   const { calendarEvents, saveCalendarEvents, isLoading } = useWellaura();
   const { theme } = useTheme();
+  const { localMealPlan, findMealById } = useMealPlan();
   const styles = getDynamicStyles(theme);
 
   const [viewMode, setViewMode] = useState<ViewMode>("month");
@@ -213,11 +274,62 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<Partial<CalendarEvent>>(initialEventState);
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
+  const mealEvents = useMemo(() => {
+    if (!localMealPlan) return [];
+    
+    const events: CalendarEvent[] = [];
+    const startOfWeek = moment(selectedDate).startOf('isoWeek');
+
+    for (let i = 0; i < 7; i++) {
+        const date = startOfWeek.clone().add(i, 'days');
+        const dayName = date.format('dddd');
+        const dayPlan = localMealPlan[dayName];
+
+        if (dayPlan) {
+            Object.keys(dayPlan).forEach(mealType => {
+                const meals = Array.isArray(dayPlan[mealType]) ? dayPlan[mealType] : [dayPlan[mealType]];
+                
+                meals.forEach((meal, index) => {
+                    if (meal && meal.id) {
+                        const mealDetails = findMealById(meal.id);
+                        if (mealDetails) {
+                            const mealTime = moment(meal.time, "HH:mm");
+                            const start = date.clone().hour(mealTime.hour()).minute(mealTime.minute()).toDate();
+                            const end = moment(start).add(1, 'hour').toDate();
+                            
+                            events.push({
+                                id: `meal_${dayName}_${mealType}_${index}`,
+                                title: `🍳 ${meal.name}`,
+                                start,
+                                end,
+                                color: '#FDBF6F',
+                                type: 'meal',
+                            });
+                        }
+                    }
+                });
+            });
+        }
+    }
+    return events;
+  }, [localMealPlan, findMealById, selectedDate]);
+  
+  const allVisibleEvents = useMemo(() => {
+    return [...calendarEvents, ...mealEvents];
+  }, [calendarEvents, mealEvents]);
+
+  
   useEffect(() => { Animated.sequence([ Animated.timing(fadeAnim, { toValue: 0.7, duration: 150, useNativeDriver: true }), Animated.timing(fadeAnim, { toValue: 1, duration: 150, useNativeDriver: true }), ]).start(); }, [viewMode, selectedDate, currentMonth, fadeAnim]);
   
   const handleNavigation = (direction: "next" | "prev") => { const amount = direction === "next" ? 1 : -1; const unit = viewMode === 'week' ? 'week' : 'day'; const newDate = moment(selectedDate).add(amount, unit).format("YYYY-MM-DD"); setSelectedDate(newDate); setCurrentMonth(newDate); };
   const goToToday = () => { const today = moment().format("YYYY-MM-DD"); setSelectedDate(today); setCurrentMonth(today); if (viewMode === 'todo') setViewMode('day'); };
-  const handleSaveEvent = (event: CalendarEvent) => { saveCalendarEvents([...calendarEvents.filter(e => e.id !== event.id), event]); };
+  const handleSaveEvent = (event: CalendarEvent) => {
+    if (event.isDeleted) {
+      saveCalendarEvents(calendarEvents.filter(e => e.id !== event.id));
+    } else {
+      saveCalendarEvents([...calendarEvents.filter(e => e.id !== event.id), event]);
+    }
+  };
   const handleDayPress = (day: DateData) => { setSelectedDate(day.dateString); setViewMode("day"); };
   const handleTimeSlotPress = (slotDate: Date) => { setSelectedEvent({ ...initialEventState, start: slotDate, end: moment(slotDate).add(1, 'hour').toDate(), color: theme.primary }); setModalVisible(true); };
   
@@ -234,7 +346,7 @@ export default function CalendarPage() {
 
   const markedDates = useMemo(() => {
     const marks: { [key: string]: any } = {};
-    calendarEvents.forEach(event => {
+    allVisibleEvents.forEach(event => {
       const dateStr = moment(event.start).format("YYYY-MM-DD");
       if (!marks[dateStr]) { marks[dateStr] = { dots: [] }; }
       if (marks[dateStr].dots.length < 4 && !marks[dateStr].dots.some((d: DotProps) => d.color === event.color)) {
@@ -244,15 +356,15 @@ export default function CalendarPage() {
     if (marks[selectedDate]) { marks[selectedDate].selected = true; } 
     else { marks[selectedDate] = { selected: true }; }
     return marks;
-  }, [calendarEvents, selectedDate]);
+  }, [allVisibleEvents, selectedDate]);
   
   const calendarTheme = {
     backgroundColor: theme.background, calendarBackground: theme.background,
     textSectionTitleColor: theme.textSecondary, selectedDayBackgroundColor: theme.primary,
-    selectedDayTextColor: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary,
+    selectedDayTextColor: tinycolor(theme.primary || '#ffffff').isDark() ? theme.white : theme.textPrimary,
     todayTextColor: theme.accent, dayTextColor: theme.textPrimary,
     textDisabledColor: theme.border, dotColor: theme.primary,
-    selectedDotColor: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary,
+    selectedDotColor: tinycolor(theme.primary || '#ffffff').isDark() ? theme.white : theme.textPrimary,
     arrowColor: theme.primary, monthTextColor: theme.textPrimary,
     textDayFontWeight: "400", textMonthFontWeight: "bold", textDayHeaderFontWeight: "500",
     textDayFontSize: 15, textMonthFontSize: 18, textDayHeaderFontSize: 13,
@@ -262,8 +374,8 @@ export default function CalendarPage() {
   const renderCalendarContent = () => {
     switch (viewMode) {
       case "month": return <Calendar key={currentMonth} current={currentMonth} onDayPress={handleDayPress} onMonthChange={(m) => setCurrentMonth(m.dateString)} markedDates={markedDates} markingType="multi-dot" theme={calendarTheme} style={styles.calendar} />;
-      case "week": return <WeekView selectedDate={selectedDate} setSelectedDate={setSelectedDate} events={calendarEvents} onTimeSlotPress={handleTimeSlotPress} onEventPress={handleEventPress} styles={styles} theme={theme} />;
-      case "day": return <DayView date={selectedDate} events={calendarEvents} onTimeSlotPress={handleTimeSlotPress} onEventPress={handleEventPress} styles={styles} theme={theme} />;
+      case "week": return <WeekView selectedDate={selectedDate} setSelectedDate={setSelectedDate} events={allVisibleEvents} onTimeSlotPress={handleTimeSlotPress} onEventPress={handleEventPress} styles={styles} theme={theme} />;
+      case "day": return <DayView date={selectedDate} events={allVisibleEvents} onTimeSlotPress={handleTimeSlotPress} onEventPress={handleEventPress} styles={styles} theme={theme} />;
       case "todo": return <ToDoListView todos={todos} setTodos={setTodos} styles={styles} theme={theme} />;
       default: return null;
     }
@@ -289,7 +401,7 @@ const getDynamicStyles = (theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   header: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.border, backgroundColor: theme.surface },
   headerNav: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
-  headerTitleContainer: { flexDirection: "row", alignItems: "center", gap: 16, flex: 1 },
+  headerTitleContainer: { flexDirection: "row", alignItems: "center", gap: 16 },
   headerMonth: { fontSize: 22, fontWeight: "bold", color: theme.textPrimary },
   arrowContainer: { flexDirection: "row", gap: 16 },
   headerControls: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -297,7 +409,7 @@ const getDynamicStyles = (theme) => StyleSheet.create({
   todayButtonText: { color: theme.textSecondary, fontWeight: "600", fontSize: 14 },
   viewModeContainer: { flexDirection: "row", borderWidth: 1, borderColor: theme.border, borderRadius: 20, overflow: "hidden", },
   iconTab: { padding: 8 },
-  activeIconTab: { backgroundColor: tinycolor(theme.primary).setAlpha(0.15).toRgbString() },
+  activeIconTab: { backgroundColor: tinycolor(theme.primary || '#ffffff').setAlpha(0.15).toRgbString() },
   calendar: { paddingTop: 10 },
   dayViewContainer: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 24 * HOUR_HEIGHT, position: 'relative' },
   hourRow: { flexDirection: "row", alignItems: "center", height: HOUR_HEIGHT },
@@ -313,10 +425,36 @@ const getDynamicStyles = (theme) => StyleSheet.create({
   weekDayNumberContainer: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   weekDayNumber: { fontSize: 16, fontWeight: "600", color: theme.textPrimary },
   weekDaySelectedStyle: { backgroundColor: theme.primary },
-  weekDayTextSelectedStyle: { color: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary },
+  weekDayTextSelectedStyle: { color: tinycolor(theme.primary || '#ffffff').isDark() ? theme.white : theme.textPrimary },
   weekDayNumberToday: { backgroundColor: theme.accent },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContainer: { backgroundColor: theme.surface, width: "90%", maxHeight: "85%", borderRadius: 24, padding: 24 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', color: theme.textPrimary, flex: 1, textAlign: 'center' },
+  modalContent: { paddingHorizontal: 4 },
+  closeButton: { padding: 4 },
+  saveButton: { padding: 4 },
+  inputGroup: { marginBottom: 20 },
+  label: { fontSize: 16, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 8 },
+  textInput: {
+    backgroundColor: theme.background,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: theme.textPrimary
+  },
+  allDayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  dateTimeRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  dateTimePicker: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.background, borderWidth: 1, borderColor: theme.border, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flex: 1, minWidth: 130 },
+  dateText: { marginLeft: 8, fontSize: 15, color: theme.textPrimary },
+  colorPickerContainer: { marginBottom: 20 },
+  colorOption: { width: 40, height: 40, borderRadius: 20, marginHorizontal: 4, borderColor: theme.textPrimary, borderWidth: 0 },
+  customColorButton: { borderWidth: 2, borderColor: theme.border, justifyContent: 'center', alignItems: 'center'},
+  deleteButtonContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 20, padding: 10, borderRadius: 12, backgroundColor: tinycolor(theme.error || '#ff0000').setAlpha(0.1).toRgbString() },
+  deleteButtonText: { marginLeft: 8, fontSize: 16, fontWeight: 'bold' },
   todoContainer: { flex: 1, backgroundColor: theme.background },
   todoItemContainer: { flexDirection: "row", alignItems: "center", backgroundColor: theme.surface, paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: theme.border, borderRadius: 12, marginBottom: 10, },
   todoItem: { flex: 1, flexDirection: "row", alignItems: "center" },
@@ -328,13 +466,36 @@ const getDynamicStyles = (theme) => StyleSheet.create({
   todoInputContainer: { flexDirection: 'row', padding: 12, backgroundColor: theme.surface, borderTopWidth: 1, borderTopColor: theme.border, alignItems: 'center' },
   todoInput: { flex: 1, backgroundColor: theme.border, paddingHorizontal: 20, paddingVertical: 12, fontSize: 16, borderRadius: 30, color: theme.textPrimary },
   todoAddButton: { marginLeft: 10, justifyContent: "center", alignItems: 'center' },
-  eventItem: { position: "absolute", borderRadius: 4, paddingHorizontal: 6, paddingVertical: 4, right: 10, left: aM_PM_TEXT_WIDTH + 15, borderWidth: 1, borderColor: 'rgba(0,0,0,0.1)', overflow: 'hidden' },
+  eventsContainer: {
+    position: 'absolute',
+    left: aM_PM_TEXT_WIDTH + 15,
+    right: 10,
+    top: 0,
+    bottom: 0,
+  },
+  eventItem: {
+    position: "absolute", 
+    borderRadius: 4, 
+    paddingHorizontal: 6, 
+    paddingVertical: 4, 
+    marginHorizontal: 1,
+    borderWidth: 1, 
+    borderColor: 'rgba(0,0,0,0.1)', 
+    overflow: 'hidden'
+  },
   eventTitle: { fontWeight: "bold", fontSize: 13 },
   eventTime: { fontSize: 11, marginTop: 2 },
-  paymentEventItem: { borderStyle: 'dashed' }, paymentEventTitle: {}, paymentEventTime: {},
-  mealEventItem: { borderWidth: 1.5, borderColor: '#FDBF6F', backgroundColor: 'transparent', }, mealEventTitle: { color: '#B45309' }, mealEventTime: { color: '#D97706' },
-  mindfulnessEventItem: { borderWidth: 1.5, borderColor: '#A5D6A7', backgroundColor: 'transparent', }, mindfulnessEventTitle: { color: '#388E3C' }, mindfulnessEventTime: { color: '#66BB6A' },
-  habitEventItem: { borderLeftWidth: 4, borderLeftColor: 'rgba(0,0,0,0.3)', paddingLeft: 10 }, habitEventTitle: {}, habitEventTime: {},
-  timeIndicator: { position: 'absolute', left: aM_PM_TEXT_WIDTH + 10, right: 0, height: 2, backgroundColor: '#D32F2F', zIndex: 100 },
+  mealEventItem: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#FDBF6F',
+    backgroundColor: tinycolor('#FDBF6F').setAlpha(0.2).toRgbString(),
+  },
+  mealEventTitle: {
+    color: theme.textPrimary,
+  },
+  mealEventTime: {
+    color: theme.textSecondary,
+  },
+  timeIndicator: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#D32F2F', zIndex: 100 },
   timeIndicatorDot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: '#D32F2F', left: -5, top: -4 },
 });

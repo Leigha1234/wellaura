@@ -9,44 +9,47 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { DRINK_NUTRITION } from "../../../components/mealData";
 import { useTheme } from "../../context/ThemeContext";
 import { Meal } from "../../types";
 
-// --- MAIN CALENDAR VIEW COMPONENT ---
+// Note: Ensure DRINK_NUTRITION is correctly imported or defined if needed
+const DRINK_NUTRITION = { coffee: { calories: 5, protein: 0, carbs: 1, fat: 0 }, tea: { calories: 2, protein: 0, carbs: 0.5, fat: 0 }, smoothie: { calories: 180, protein: 4, carbs: 35, fat: 2 },};
 
+// --- MAIN CALENDAR VIEW COMPONENT ---
 export default function MonthlyMealView() {
     const navigation = useNavigation();
     const route = useRoute();
     const { theme } = useTheme();
     const styles = getDynamicStyles(theme);
-    
-    // Receive all necessary data from the MealPlanner page
+
     const {
         monthlyTotals,
         cheatDays,
         mealPlan,
         loggedMeals,
         loggedDrinks,
-        allMeals // Receive the raw allMeals array
+        allMeals,
+        localMealCache = [],
     } = route.params;
 
-    // Recreate the findMealByName function locally
-    const findMealByName = useCallback((name: string): Meal | undefined => {
-        if (!name) return undefined;
-        return allMeals.find(m => m.name === name);
-    }, [allMeals]);
+    const findMealById = useCallback((id: string): Meal | undefined => {
+        if (!id) return undefined;
+        return allMeals.find(m => m.id === id) || localMealCache.find(m => m.id === id);
+    }, [allMeals, localMealCache]);
 
     const [viewDate, setViewDate] = useState(moment());
     const [selectedDateString, setSelectedDateString] = useState < string | null > (moment().format('YYYY-MM-DD'));
 
     const selectedDayDetails = useMemo(() => {
-        if (!selectedDateString || !monthlyTotals[selectedDateString]) {
-            // Find the most recent day with data if the selected day has none
-            const recentDayWithData = Object.keys(monthlyTotals).sort().reverse().find(date => monthlyTotals[date]);
-            if (!recentDayWithData) return null;
-            setSelectedDateString(recentDayWithData);
-            return null; // Return null this render, it will re-render with the new date
+        if (!selectedDateString) return null;
+        
+        const dayTotals = monthlyTotals[selectedDateString];
+        if (!dayTotals) {
+             const recentDayWithData = Object.keys(monthlyTotals).sort().reverse().find(date => monthlyTotals[date]);
+             if (recentDayWithData && recentDayWithData !== selectedDateString) {
+                setSelectedDateString(recentDayWithData);
+             }
+             return null;
         }
 
         const dayLog = loggedMeals[selectedDateString] || {};
@@ -57,15 +60,24 @@ export default function MonthlyMealView() {
         if (dayPlan) {
             const processMeal = (mealType: string, index?: number) => {
                 const isSnack = mealType === 'snack';
-                let mealName: string | undefined;
+                let mealEntry;
+
                 if (isSnack && index !== undefined) {
-                    if (dayLog.snacks?.[index]) mealName = dayPlan.snacks[index]?.name;
+                    if (dayLog.snacks?.[index]) mealEntry = dayPlan.snacks?.[index];
                 } else if (!isSnack) {
-                    if (dayLog[mealType]) mealName = dayPlan[mealType]?.name;
+                    if (dayLog[mealType]) mealEntry = dayPlan[mealType];
                 }
-                if (mealName) {
-                    const mealData = findMealByName(mealName);
-                    if (mealData) items.push({ type: 'meal', ...mealData });
+
+                if (mealEntry?.id) {
+                    const mealData = findMealById(mealEntry.id);
+                    if (mealData) {
+                         items.push({
+                            type: 'meal',
+                            name: mealEntry.name,
+                            servings: mealEntry.servings || 1,
+                            nutrition: mealData.nutrition,
+                        });
+                    }
                 }
             };
             processMeal('breakfast');
@@ -79,12 +91,12 @@ export default function MonthlyMealView() {
         (dayDrinks || []).forEach(drink => {
             const nutrition = drink.nutrition || DRINK_NUTRITION[drink.type];
             if (nutrition) {
-                items.push({ type: 'drink', name: drink.name, nutrition });
+                items.push({ type: 'drink', name: drink.name, nutrition, servings: 1 });
             }
         });
 
-        return { items, totals: monthlyTotals[selectedDateString] };
-    }, [selectedDateString, loggedMeals, mealPlan, loggedDrinks, findMealByName, monthlyTotals]);
+        return { items, totals: dayTotals };
+    }, [selectedDateString, loggedMeals, mealPlan, loggedDrinks, findMealById, monthlyTotals]);
 
     const renderHeader = () => (
         <View style={styles.calendarHeader}>
@@ -164,13 +176,26 @@ export default function MonthlyMealView() {
                     {selectedDayDetails && (
                         <View style={styles.calendarDetailContainer}>
                             <Text style={styles.calendarDetailTitle}>Details for {moment(selectedDateString).format('MMMM Do, YYYY')}</Text>
-                            {selectedDayDetails.items.length > 0 ? selectedDayDetails.items.map((item, index) => (
+                            {selectedDayDetails.items.length > 0 ? selectedDayDetails.items.map((item, index) => {
+                                // Calculate totals per item, accounting for servings
+                                const totalNutrition = {
+                                    calories: Math.round(item.nutrition.calories * (item.servings || 1)),
+                                    protein: Math.round(item.nutrition.protein * (item.servings || 1)),
+                                    carbs: Math.round(item.nutrition.carbs * (item.servings || 1)),
+                                    fat: Math.round(item.nutrition.fat * (item.servings || 1)),
+                                };
+                                return (
                                 <View key={index} style={styles.calendarDetailMealRow}>
                                     <Ionicons name={item.type === 'meal' ? 'restaurant-outline' : 'water-outline'} size={18} color={theme.textSecondary} style={{ marginRight: 10 }} />
-                                    <Text style={styles.calendarDetailMealName} numberOfLines={1}>{item.name.replace(/(\s*\(Logged\))? - \d+$/, '')}</Text>
-                                    <Text style={styles.calendarDetailMealNutrition}>{item.nutrition.calories} kcal</Text>
+                                    <View style={styles.calendarDetailInfo}>
+                                        <Text style={styles.calendarDetailMealName} numberOfLines={1}>{item.name.replace(/(\s*\(Logged\))? - \d+$/, '')}</Text>
+                                        <Text style={styles.calendarDetailMealSubText}>
+                                            P: {totalNutrition.protein}g, C: {totalNutrition.carbs}g, F: {totalNutrition.fat}g
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.calendarDetailMealNutrition}>{totalNutrition.calories} kcal</Text>
                                 </View>
-                            )) : <Text style={styles.placeholderText}>No items logged for this day.</Text>}
+                            )}) : <Text style={styles.placeholderText}>No items logged for this day.</Text>}
                             <View style={styles.calendarDetailTotalRow}>
                                 <Text style={styles.calendarDetailTotalLabel}>Total</Text>
                                 <Text style={styles.calendarDetailTotalNutrition}>
@@ -208,8 +233,10 @@ const getDynamicStyles = (theme) => {
         calendarCellCalorieText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary },
         calendarDetailContainer: { marginHorizontal: 15, marginTop: 20, backgroundColor: theme.surface, borderRadius: 15, padding: 15, borderWidth: 1, borderColor: theme.border },
         calendarDetailTitle: { fontSize: 18, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 10, },
-        calendarDetailMealRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.border, },
-        calendarDetailMealName: { fontSize: 15, color: theme.textPrimary, flex: 1 },
+        calendarDetailMealRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.border, },
+        calendarDetailInfo: { flex: 1, marginRight: 8, },
+        calendarDetailMealName: { fontSize: 15, color: theme.textPrimary, fontWeight: '600' },
+        calendarDetailMealSubText: { fontSize: 12, color: theme.textSecondary, paddingTop: 2 },
         calendarDetailMealNutrition: { fontSize: 15, color: theme.textSecondary, fontWeight: '500' },
         calendarDetailTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, marginTop: 5, },
         calendarDetailTotalLabel: { fontSize: 16, color: theme.textPrimary, fontWeight: 'bold', },
