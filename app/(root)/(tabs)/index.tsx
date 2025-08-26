@@ -1,6 +1,6 @@
 import { Feather, FontAwesome, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useRouter } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import moment from "moment";
 import React, { useEffect, useMemo, useState } from "react";
 import { Alert, LayoutAnimation, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, UIManager, View } from "react-native";
@@ -11,40 +11,24 @@ import ColorPicker from "react-native-wheel-color-picker";
 import tinycolor from "tinycolor2";
 import { generateWeeklyInsights } from "../../../lib/insights";
 import { useWellaura } from "../../WellauraContext";
-import { TodaySnapshot } from "./TodaySnapshot";
+import { useCycle } from "../../context/CycleContext";
+import { useTheme } from "../../context/ThemeContext";
+import { TodaySnapshot as TodaySnapshotModal } from "./TodaySnapshot";
 import { WeatherWidget } from "./WeatherWidget";
+
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// --- THEME & COLOR CONSTANTS ---
-const WELLAURA_WHISPER_COLORS = {
-    name: "Wellaura's Whisper",
-    colors: {
-        primary: '#395D48',       // Forest Green
-        accent: '#8CBCA7',        // Heart Mint
-        background: '#E4ECEA',    // Soft Sage
-        surface: '#FFFFFF',       // White
-        textPrimary: '#2C2C2C',     // Charcoal Black
-        textSecondary: '#395D48',  // Forest Green
-        border: '#D8E0D9',        // A slightly darker sage for subtle borders.
-        white: '#FFFFFF'
-    }
-};
-
-const DEFAULT_COLORS = WELLAURA_WHISPER_COLORS.colors;
+// --- CONSTANTS ---
 const pastelColors = ['#FFFFFF', '#fde4cf', '#fbf8cc', '#d9f9cc', '#cce6ff', '#d9cce6', '#fccfcf', '#cfd8dc'];
-
 const PRESET_THEMES = [
-    // --- Light Themes ---
-    WELLAURA_WHISPER_COLORS,
+    { name: "Wellaura's Whisper", colors: { primary: '#395D48', accent: '#8CBCA7', background: '#E4ECEA', surface: '#FFFFFF', textPrimary: '#2C2C2C', textSecondary: '#395D48', border: '#D8E0D9', white: '#FFFFFF' }},
     { name: 'Ocean Breeze', colors: { primary: '#3B82F6', accent: '#93C5FD', background: '#F0F9FF', surface: '#FFFFFF', textPrimary: '#1E3A8A', textSecondary: '#3B82F6', border: '#DBEAFE', white: '#FFFFFF' }},
     { name: 'Rose Quartz', colors: { primary: '#EC4899', accent: '#F9A8D4', background: '#FFF1F2', surface: '#FFFFFF', textPrimary: '#831843', textSecondary: '#EC4899', border: '#FCE7F3', white: '#FFFFFF' }},
     { name: 'Amethyst Sky', colors: { primary: '#8B5CF6', accent: '#C4B5FD', background: '#F5F3FF', surface: '#FFFFFF', textPrimary: '#4C1D95', textSecondary: '#8B5CF6', border: '#EDE9FE', white: '#FFFFFF' }},
     { name: 'Golden Hour', colors: { primary: '#F97716', accent: '#FBBF24', background: '#FFF7ED', surface: '#FFFFFF', textPrimary: '#78350F', textSecondary: '#F97716', border: '#FEF3C7', white: '#FFFFFF' }},
-    
-    // --- Dark Themes ---
     { name: 'Midnight', colors: { primary: '#9CA3AF', accent: '#D1D5DB', background: '#111827', surface: '#1F2937', textPrimary: '#F9FAFB', textSecondary: '#9CA3AF', border: '#374151', white: '#FFFFFF' }},
     { name: 'Deep Ocean', colors: { primary: '#60A5FA', accent: '#93C5FD', background: '#1E293B', surface: '#334155', textPrimary: '#F1F5F9', textSecondary: '#94A3B8', border: '#475569', white: '#FFFFFF' }},
     { name: 'Forest Night', colors: { primary: '#34D399', accent: '#A7F3D0', background: '#1A2421', surface: '#25342E', textPrimary: '#F0FDF4', textSecondary: '#A1AFAF', border: '#3A4A44', white: '#FFFFFF' }},
@@ -57,9 +41,18 @@ const WIDGETS_STORAGE_KEY = '@user_widgets_layout_v4';
 const LAYOUT_STORAGE_KEY = '@user_layout_columns_v3';
 const THEME_STORAGE_KEY = '@user_theme_v1';
 
+type BudgetPeriod = 'Weekly' | 'Monthly';
+const getPeriodKey = (date: Date, period: BudgetPeriod): string => {
+    if (period === 'Weekly') {
+        return moment(date).startOf('isoWeek').format('YYYY-MM-DD');
+    }
+    return moment(date).format('YYYY-MM');
+};
+
 
 // --- DYNAMIC STYLES ---
-const getDynamicStyles = (theme) => {
+const getDynamicStyles = (theme: any) => {
+    if (!theme) return StyleSheet.create({});
     const isSurfaceDark = tinycolor(theme.surface).isDark();
     const cardTextColor = isSurfaceDark ? theme.white : theme.textPrimary;
     const cardSecondaryTextColor = isSurfaceDark ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary;
@@ -72,7 +65,6 @@ const getDynamicStyles = (theme) => {
       headerName: { fontSize: 18, fontWeight: "bold", color: cardTextColor },
       headerSubtitle: { fontSize: 14, color: cardSecondaryTextColor, marginTop: 4 },
       headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-      mainEditButton: { backgroundColor: theme.primary },
       iconButton: { padding: 10, backgroundColor: theme.border, borderRadius: 20, justifyContent: 'center', alignItems: 'center', width: 42, height: 42 },
       todayButton: { padding: 10, backgroundColor: tinycolor(theme.primary).setAlpha(0.12).toRgbString(), borderRadius: 20, width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
       widgetContainer: { padding: 8 },
@@ -116,105 +108,102 @@ const getDynamicStyles = (theme) => {
       presetThemeSwatch: { width: 20, height: 20, borderRadius: 10, marginRight: -8, borderWidth: 2 },
       addWidgetItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.border, padding: 15, borderRadius: 15, marginBottom: 10 },
       addWidgetItemText: { fontSize: 18, fontWeight: '500', marginLeft: 15, color: theme.textPrimary },
+      // NEW: Styles for the updated Budget Widget
+      upcomingBillsContainer: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: tinycolor(cardTextColor).setAlpha(0.1).toRgbString() },
+      billRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+      billDueDate: { fontSize: 12, color: cardSecondaryTextColor },
     });
 };
 
 // --- WIDGET COMPONENTS ---
-const SkeletonLoader = ({ height, styles }) => { const shimmer = useSharedValue(0); useEffect(() => { shimmer.value = withRepeat(withTiming(1, { duration: 1200 }), -1, false); }, []); const animatedStyle = useAnimatedStyle(() => ({ backgroundColor: interpolateColor(shimmer.value, [0, 0.5, 1], ['#E2E8F0', '#F1F5F9', '#E2E8F0']) })); return <Animated.View style={[styles.skeleton, { height: height - 40 }, animatedStyle]} />; };
-const CalendarWidget = React.memo(({ styles }) => { const { calendarEvents } = useWellaura(); const today = moment(); const formattedDate = today.format("dddd, MMMM D"); const todaysEvents = calendarEvents.filter(e => moment(e.start).isSame(today, 'day') && !e.allDay).sort((a, b) => a.start.getTime() - b.start.getTime()).slice(0, 3); return ( <View><Text style={styles.dateText}>{formattedDate}</Text><Text style={styles.subTitle}>Today's Agenda</Text>{todaysEvents.length > 0 ? (todaysEvents.map(event => (<Text key={event.id} style={styles.cardText} numberOfLines={1}>{moment(event.start).format('h:mma')} - {event.title}</Text>))) : (<Text style={styles.cardText}>No events scheduled today.</Text>)}</View> ); });
-const BudgetWidget = React.memo(({ styles }) => { const { transactions, budgetSettings } = useWellaura(); const { totalIncome, totalExpenses } = useMemo(() => { const income = (budgetSettings.incomeVaries ? transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.budgetedAmount, 0) : parseFloat(budgetSettings.fixedIncome || '0')) || 0; const expenses = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + (t.actualAmount ?? t.budgetedAmount), 0); return { totalIncome: income, totalExpenses: expenses }; }, [transactions, budgetSettings]); const remaining = totalIncome - totalExpenses; return <Text style={styles.cardText}>Remaining this period: £{remaining.toFixed(2)}</Text>; });
-const HabitsWidget = React.memo(({ styles }) => { const { habits } = useWellaura(); const today = new Date().toISOString().split('T')[0]; if (!habits || habits.length === 0) { return <Text style={styles.cardText}>No habits set up yet.</Text> } return ( <View style={{ gap: 4 }}>{habits.slice(0, 3).map((habit) => { const isCompleted = habit.history?.[today]?.completed || false; return (<Text key={habit.id} style={[styles.cardText, { textDecorationLine: isCompleted ? "line-through" : "none" }]}>{habit.icon} {habit.name}</Text>) })}</View> ); });
-const MindfulnessWidget = React.memo(({ styles }) => (<View><Text style={styles.cardText}>How are you feeling today?</Text><Text style={{ fontSize: 24, marginTop: 5 }}>😌</Text></View>));
-const MealPlannerWidget = React.memo(({ styles }) => { const { mealPlan } = useWellaura(); const dayOfWeek = moment().format('dddd'); const dinner = mealPlan[dayOfWeek]?.dinner?.name; return <Text style={styles.cardText}>Tonight's Dinner: {dinner || 'Not planned'}</Text>; });
-const CycleTrackerWidget = React.memo(({ styles }) => { const { cycleData } = useWellaura(); if (!cycleData || !cycleData.cycleStart) return <Text style={styles.cardText}>No cycle data yet.</Text>; const dayIndex = moment().diff(moment(cycleData.cycleStart), 'days'); return <Text style={styles.cardText}>Cycle Day: {dayIndex + 1}</Text>; });
+const SkeletonLoader = ({ height, styles }: any) => { const shimmer = useSharedValue(0); useEffect(() => { shimmer.value = withRepeat(withTiming(1, { duration: 1200 }), -1, false); }, []); const animatedStyle = useAnimatedStyle(() => ({ backgroundColor: interpolateColor(shimmer.value, [0, 0.5, 1], ['#E2E8F0', '#F1F5F9', '#E2E8F0']) })); return <Animated.View style={[styles.skeleton, { height: height - 40 }, animatedStyle]} />; };
+const CalendarWidget = React.memo(({ styles }: any) => { const { calendarEvents } = useWellaura(); const today = moment(); const formattedDate = today.format("dddd, MMMM D"); const todaysEvents = calendarEvents.filter(e => moment(e.start).isSame(today, 'day') && !e.allDay).sort((a, b) => a.start.getTime() - b.start.getTime()).slice(0, 3); return ( <View><Text style={styles.dateText}>{formattedDate}</Text><Text style={styles.subTitle}>Today's Agenda</Text>{todaysEvents.length > 0 ? (todaysEvents.map(event => (<Text key={event.id} style={styles.cardText} numberOfLines={1}>{moment(event.start).format('h:mma')} - {event.title}</Text>))) : (<Text style={styles.cardText}>No events scheduled today.</Text>)}</View> ); });
 
-const InsightsWidget = React.memo(({ theme, styles }) => { const { habits, transactions, cycleData } = useWellaura(); const [isExpanded, setIsExpanded] = useState(false); const rotation = useSharedValue(0); const insights = useMemo(() => generateWeeklyInsights(habits, transactions, cycleData), [habits, transactions, cycleData]); const animatedIconStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${rotation.value}deg` }] })); const toggleExpand = () => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setIsExpanded(!isExpanded); rotation.value = withTiming(isExpanded ? 0 : 180, { duration: 250 }); }; if (insights.length === 0) { return null; } return ( <TouchableOpacity activeOpacity={0.8} onPress={toggleExpand}><View style={styles.insightsCard}><View style={styles.insightsHeader}><Ionicons name="sparkles" size={22} color={theme.primary} /><Text style={[styles.cardTitle, {color: theme.textPrimary}]}>Your Weekly Insights</Text><Animated.View style={animatedIconStyle}><Ionicons name="chevron-down-outline" size={24} color={theme.primary} /></Animated.View></View>{isExpanded && ( <View style={styles.insightsContent}>{insights.map((insight, index) => (<Text key={index} style={styles.insightText}>• {insight}</Text>))}</View> )}</View></TouchableOpacity> );});
+// UPDATED: BudgetWidget now shows upcoming bills
+const BudgetWidget = React.memo(({ styles }: any) => {
+    const { transactions, budgetSettings } = useWellaura();
 
-const ColorPickerModal = ({ isVisible, onClose, initialColor, onColorConfirm, theme, styles }) => { const [tempColor, setTempColor] = useState(initialColor); const [hexInput, setHexInput] = useState(tinycolor(initialColor).toHexString()); useEffect(() => { setTempColor(initialColor); setHexInput(tinycolor(initialColor).toHexString()); }, [initialColor, isVisible]); const handleColorChange = (color) => { setTempColor(color); setHexInput(tinycolor(color).toHexString()); }; const applyHexCode = () => { const color = tinycolor(hexInput); if (color.isValid()) { setTempColor(color.toHexString()); } else { Alert.alert("Invalid Color", "Please enter a valid HEX color code."); } }; return ( <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade"><View style={styles.modalBackdrop}><View style={styles.colorModalContainer}><Text style={styles.modalTitle}>Choose a Color</Text><View style={styles.pickerWrapper}><ColorPicker color={tempColor} onColorChangeComplete={handleColorChange} thumbSize={30} sliderSize={20} noSnap={true} row={false} /></View><Text style={styles.swatchLabel}>Swatches</Text><View style={styles.swatchContainer}>{pastelColors.map(color => (<TouchableOpacity key={color} style={[styles.swatch, { backgroundColor: color, borderColor: tinycolor.equals(tempColor, color) ? theme.primary : theme.border }]} onPress={() => handleColorChange(color)} />))}</View><View style={styles.hexInputContainer}><TextInput style={styles.hexInput} value={hexInput} onChangeText={setHexInput} placeholder="#FFFFFF" autoCapitalize="none" /><TouchableOpacity style={styles.applyButton} onPress={applyHexCode}><Text style={styles.applyButtonText}>Apply</Text></TouchableOpacity></View><TouchableOpacity style={styles.confirmButton} onPress={() => onColorConfirm(tempColor)}><Text style={styles.confirmButtonText}>Done</Text></TouchableOpacity></View></View></Modal> );};
+    const thisPeriodTransactions = useMemo(() => {
+        const now = new Date();
+        const currentPeriodKey = getPeriodKey(now, budgetSettings.budgetPeriod);
+        return transactions.filter(t => getPeriodKey(new Date(t.date), budgetSettings.budgetPeriod) === currentPeriodKey);
+    }, [transactions, budgetSettings.budgetPeriod]);
+    
+    const { totalIncome, totalExpenses } = useMemo(() => {
+        const income = budgetSettings.incomeVaries ? thisPeriodTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.actualAmount ?? t.budgetedAmount), 0) : parseFloat(budgetSettings.fixedIncome || '0') || 0;
+        const expenses = thisPeriodTransactions.filter(t => t.type === 'expense').reduce((sum, t) => {
+            if (t.actualAmount !== null) return sum + t.actualAmount;
+            if (!t.isVariable) return sum + t.budgetedAmount;
+            return sum;
+        }, 0);
+        return { totalIncome: income, totalExpenses: expenses };
+    }, [thisPeriodTransactions, budgetSettings]);
 
-const ThemeEditorModal = ({ isVisible, onClose, theme, onColorSelect, onSelectPreset, styles }) => {
-    const themeOptions = [ { key: 'background', label: 'Page Background' }, { key: 'surface', label: 'Widget Background' }, { key: 'textPrimary', label: 'Primary Text' }, { key: 'primary', label: 'Accent Color' }, ];
+    const upcomingPayments = useMemo(() => {
+        const now = moment();
+        const nextWeek = moment().add(7, 'days');
+        return (budgetSettings.scheduledPayments || [])
+            .filter(p => moment(p.date).isBetween(now, nextWeek))
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    }, [budgetSettings.scheduledPayments]);
+
+    const remaining = totalIncome - totalExpenses;
+    
     return (
-        <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade">
-            <View style={styles.modalBackdrop}>
-                <View style={[styles.colorModalContainer, {backgroundColor: theme.surface}]}>
-                    <Text style={[styles.modalTitle, {color: tinycolor(theme.surface).isDark() ? theme.white : theme.textPrimary}]}>Edit Theme</Text>
-                    <ScrollView style={{width: '100%'}}>
-                        <Text style={[styles.swatchLabel, {color: tinycolor(theme.surface).isDark() ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary}]}>Preset Themes</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetThemeScrollView}>
-                            {PRESET_THEMES.map(preset => (
-                                <TouchableOpacity key={preset.name} onPress={() => onSelectPreset(preset.colors)}>
-                                    <View style={[styles.presetThemeCard, { backgroundColor: preset.colors.surface, borderColor: preset.colors.primary }]}>
-                                        <Text style={[styles.presetThemeName, { color: tinycolor(preset.colors.surface).isDark() ? preset.colors.white : preset.colors.textPrimary }]}>{preset.name}</Text>
-                                        <View style={styles.presetThemeColors}>
-                                            <View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.primary, borderColor: preset.colors.surface }]} />
-                                            <View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.accent, borderColor: preset.colors.surface }]} />
-                                            <View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.background, borderColor: preset.colors.surface }]} />
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                        <Text style={[styles.swatchLabel, {color: tinycolor(theme.surface).isDark() ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary}]}>Custom Colors</Text>
-                        {themeOptions.map(option => (
-                            <TouchableOpacity key={option.key} style={styles.themeEditorRow} onPress={() => onColorSelect(option.key)}>
-                                <Text style={[styles.themeEditorLabel, {color: tinycolor(theme.surface).isDark() ? theme.white : theme.textPrimary}]}>{option.label}</Text>
-                                <View style={[styles.themeEditorSwatch, { backgroundColor: theme[option.key] }]} />
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                    <TouchableOpacity style={[styles.confirmButton, {backgroundColor: theme.primary}]} onPress={onClose}><Text style={[styles.confirmButtonText, {color: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary}]}>Done</Text></TouchableOpacity>
+        <View>
+            <Text style={styles.subTitle}>Remaining This Month</Text>
+            <Text style={styles.cardText}>£{remaining.toFixed(2)}</Text>
+            
+            {upcomingPayments.length > 0 && (
+                <View style={styles.upcomingBillsContainer}>
+                    <Text style={styles.subTitle}>Upcoming Bills</Text>
+                    {upcomingPayments.map(payment => (
+                        <View key={payment.id} style={styles.billRow}>
+                            <Text style={styles.cardText}>{payment.name}</Text>
+                            <View style={{alignItems: 'flex-end'}}>
+                                <Text style={styles.cardText}>£{payment.amount.toFixed(2)}</Text>
+                                <Text style={styles.billDueDate}>{moment(payment.date).fromNow()}</Text>
+                            </View>
+                        </View>
+                    ))}
                 </View>
-            </View>
-        </Modal>
+            )}
+        </View>
     );
-};
+});
+
+const HabitsWidget = React.memo(({ styles }: any) => { const { habits } = useWellaura(); const today = new Date().toISOString().split('T')[0]; if (!habits || habits.length === 0) { return <Text style={styles.cardText}>No habits set up yet.</Text> } return ( <View style={{ gap: 4 }}>{habits.slice(0, 3).map((habit: any) => { const isCompleted = habit.history?.[today]?.completed || false; return (<Text key={habit.id} style={[styles.cardText, { textDecorationLine: isCompleted ? "line-through" : "none" }]}>{habit.icon} {habit.name}</Text>) })}</View> ); });
+const MindfulnessWidget = React.memo(({ styles }: any) => (<View><Text style={styles.cardText}>How are you feeling today?</Text><Text style={{ fontSize: 24, marginTop: 5 }}>😌</Text></View>));
+const MealPlannerWidget = React.memo(({ styles }: any) => { const { mealPlan } = useWellaura(); const dayOfWeek = moment().format('dddd'); const dinner = mealPlan[dayOfWeek]?.dinner?.name; return <Text style={styles.cardText}>Tonight's Dinner: {dinner || 'Not planned'}</Text>; });
+const TodaySnapshotWidget = React.memo(({ styles }: any) => { const { cycleInfo, todaysInsight } = useCycle(); const { phaseForToday, dayOfCycle } = cycleInfo; return ( <View><Text style={styles.subTitle}>{dayOfCycle > 0 ? `Day ${dayOfCycle} - ${phaseForToday}` : 'Log your cycle to begin'}</Text><Text style={styles.cardText}><Text style={{ fontWeight: 'bold' }}>You should expect: </Text>{todaysInsight}</Text></View> ); });
+const CycleTrackerWidget = React.memo(({ styles }: any) => { const { cycleInfo } = useCycle(); return ( <View><Text style={styles.subTitle}>{cycleInfo.phaseForToday}</Text><Text style={styles.cardText}>What are your symptoms today?</Text></View> ); });
+const InsightsWidget = React.memo(({ theme, styles }: any) => { const { habits, transactions } = useWellaura(); const { cycleInfo } = useCycle(); const [isExpanded, setIsExpanded] = useState(false); const rotation = useSharedValue(0); const generatedInsights = useMemo(() => { const cycleDataForInsights = { cycleStart: cycleInfo.lastCycleStart, phase: cycleInfo.phaseForToday }; return generateWeeklyInsights(habits, transactions, cycleDataForInsights); }, [habits, transactions, cycleInfo]); const allInsights = useMemo(() => { let cycleInsight = ""; if (cycleInfo.dayOfCycle > 0) { cycleInsight = `You're on Day ${cycleInfo.dayOfCycle} of your cycle (${cycleInfo.phaseForToday}).`; } return [cycleInsight, ...generatedInsights].filter(Boolean); }, [cycleInfo, generatedInsights]); const animatedIconStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${rotation.value}deg` }] })); const toggleExpand = () => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setIsExpanded(!isExpanded); rotation.value = withTiming(isExpanded ? 0 : 180, { duration: 250 }); }; if (allInsights.length === 0) { return null; } return ( <TouchableOpacity activeOpacity={0.8} onPress={toggleExpand}><View style={styles.insightsCard}><View style={styles.insightsHeader}><Ionicons name="sparkles" size={22} color={theme.primary} /><Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Your Weekly Insights</Text><Animated.View style={animatedIconStyle}><Ionicons name="chevron-down-outline" size={24} color={theme.primary} /></Animated.View></View>{isExpanded && ( <View style={styles.insightsContent}>{allInsights.map((insight: string, index: number) => ( <Text key={index} style={styles.insightText}>• {insight}</Text> ))}
+                    </View>
+                )}
+            </View>
+        </TouchableOpacity>
+    );
+});
+const ColorPickerModal = ({ isVisible, onClose, initialColor, onColorConfirm, theme, styles }: any) => { const [tempColor, setTempColor] = useState(initialColor); const [hexInput, setHexInput] = useState(tinycolor(initialColor).toHexString()); useEffect(() => { setTempColor(initialColor); setHexInput(tinycolor(initialColor).toHexString()); }, [initialColor, isVisible]); const handleColorChange = (color: string) => { setTempColor(color); setHexInput(tinycolor(color).toHexString()); }; const applyHexCode = () => { const color = tinycolor(hexInput); if (color.isValid()) { setTempColor(color.toHexString()); } else { Alert.alert("Invalid Color", "Please enter a valid HEX color code."); } }; return ( <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade"><View style={styles.modalBackdrop}><View style={styles.colorModalContainer}><Text style={styles.modalTitle}>Choose a Color</Text><View style={styles.pickerWrapper}><ColorPicker color={tempColor} onColorChangeComplete={handleColorChange} thumbSize={30} sliderSize={20} noSnap={true} row={false} /></View><Text style={styles.swatchLabel}>Swatches</Text><View style={styles.swatchContainer}>{pastelColors.map(color => (<TouchableOpacity key={color} style={[styles.swatch, { backgroundColor: color, borderColor: tinycolor.equals(tempColor, color) ? theme.primary : theme.border }]} onPress={() => handleColorChange(color)} />))}</View><View style={styles.hexInputContainer}><TextInput style={styles.hexInput} value={hexInput} onChangeText={setHexInput} placeholder="#FFFFFF" autoCapitalize="none" /><TouchableOpacity style={styles.applyButton} onPress={applyHexCode}><Text style={styles.applyButtonText}>Apply</Text></TouchableOpacity></View><TouchableOpacity style={styles.confirmButton} onPress={() => onColorConfirm(tempColor)}><Text style={styles.confirmButtonText}>Done</Text></TouchableOpacity></View></View></Modal> );};
+const ThemeEditorModal = ({ isVisible, onClose, theme, onColorSelect, onSelectPreset, styles }: any) => { const themeOptions = [ { key: 'background', label: 'Page Background' }, { key: 'surface', label: 'Widget Background' }, { key: 'textPrimary', label: 'Primary Text' }, { key: 'primary', label: 'Accent Color' }, ]; return ( <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade"><View style={styles.modalBackdrop}><View style={[styles.colorModalContainer, {backgroundColor: theme.surface}]}><Text style={[styles.modalTitle, {color: tinycolor(theme.surface).isDark() ? theme.white : theme.textPrimary}]}>Edit Theme</Text><ScrollView style={{width: '100%'}}><Text style={[styles.swatchLabel, {color: tinycolor(theme.surface).isDark() ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary}]}>Preset Themes</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetThemeScrollView}>{PRESET_THEMES.map(preset => ( <TouchableOpacity key={preset.name} onPress={() => onSelectPreset(preset.colors)}><View style={[styles.presetThemeCard, { backgroundColor: preset.colors.surface, borderColor: preset.colors.primary }]}><Text style={[styles.presetThemeName, { color: tinycolor(preset.colors.surface).isDark() ? preset.colors.white : preset.colors.textPrimary }]}>{preset.name}</Text><View style={styles.presetThemeColors}><View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.primary, borderColor: preset.colors.surface }]} /><View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.accent, borderColor: preset.colors.surface }]} /><View style={[styles.presetThemeSwatch, { backgroundColor: preset.colors.background, borderColor: preset.colors.surface }]} /></View></View></TouchableOpacity> ))}</ScrollView><Text style={[styles.swatchLabel, {color: tinycolor(theme.surface).isDark() ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary}]}>Custom Colors</Text>{themeOptions.map(option => ( <TouchableOpacity key={option.key} style={styles.themeEditorRow} onPress={() => onColorSelect(option.key)}><Text style={[styles.themeEditorLabel, {color: tinycolor(theme.surface).isDark() ? theme.white : theme.textPrimary}]}>{option.label}</Text><View style={[styles.themeEditorSwatch, { backgroundColor: theme[option.key] }]} /></TouchableOpacity> ))}</ScrollView><TouchableOpacity style={[styles.confirmButton, {backgroundColor: theme.primary}]} onPress={onClose}><Text style={[styles.confirmButtonText, {color: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary}]}>Done</Text></TouchableOpacity></View></View></Modal> );};
 
 // --- WIDGET CONFIGURATION ---
 type Widget = { key: string; path: string; title: string; icon: (theme: any, color: string) => React.ReactNode; component: React.FC<any>; height: number; color?: string };
 const WIDGETS_TEMPLATE: Widget[] = [
+  { key: "cycle-tracker-widget", path: "/(root)/(tabs)/cycle", title: "Log Cycle Symptoms", icon: (theme, color) => <Ionicons name="add-circle-outline" size={20} color={color} />, component: CycleTrackerWidget, height: 160 },
   { key: "calendar-widget", path: "/(root)/(tabs)/calendar", title: "Calendar & To-Do", icon: (theme, color) => <Ionicons name="calendar-outline" size={20} color={color} />, component: CalendarWidget, height: 240 },
-  { key: "budget-widget", path: "/(root)/(tabs)/budget", title: "Budget", icon: (theme, color) => <FontAwesome name="money" size={20} color={color} />, component: BudgetWidget, height: 160 },
+  // UPDATED: Increased default height for the Budget Widget
+  { key: "budget-widget", path: "/(root)/(tabs)/budget", title: "Budget", icon: (theme, color) => <FontAwesome name="money" size={20} color={color} />, component: BudgetWidget, height: 220 },
   { key: "habits-widget", path: "/(root)/(tabs)/habit-tracker", title: "Habits", icon: (theme, color) => <Ionicons name="checkmark-done-outline" size={20} color={color} />, component: HabitsWidget, height: 160 },
   { key: "mindfulness-widget", path: "/(root)/(tabs)/mindfulness-page", title: "Mindfulness", icon: (theme, color) => <Ionicons name="leaf-outline" size={20} color={color} />, component: MindfulnessWidget, height: 160 },
   { key: "meal-planner-widget", path: "/(root)/(tabs)/meal-planner", title: "Meal Planner", icon: (theme, color) => <Ionicons name="restaurant-outline" size={20} color={color} />, component: MealPlannerWidget, height: 160 },
-  { key: "cycle-tracker-widget", path: "/(root)/(tabs)/cycle", title: "Cycle Tracker", icon: (theme, color) => <Ionicons name="female-outline" size={20} color={color} />, component: CycleTrackerWidget, height: 160 },
 ];
+const WidgetRenderer = ({ item, isLoading, styles }: any) => { const WidgetComponent = item.component; return isLoading ? <SkeletonLoader height={item.height} styles={styles} /> : <WidgetComponent styles={styles} />;};
+const AddWidgetModal = ({ isVisible, onClose, onAddWidget, availableWidgets, theme, styles }: any) => { return ( <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade"><View style={styles.modalBackdrop}><View style={[styles.colorModalContainer, { backgroundColor: theme.background }]}><Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Add a Widget</Text><ScrollView style={{ width: '100%' }}>{availableWidgets.map((widget: Widget) => { const icon = widget.icon(theme, theme.textPrimary); return ( <TouchableOpacity key={widget.key} style={styles.addWidgetItem} onPress={() => onAddWidget(widget)}> {icon} <Text style={styles.addWidgetItemText}>{widget.title}</Text></TouchableOpacity> );})}</ScrollView><TouchableOpacity style={[styles.confirmButton, { backgroundColor: theme.primary }]} onPress={onClose}><Text style={[styles.confirmButtonText, { color: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary }]}>Done</Text></TouchableOpacity></View></View></Modal> );};
 
-const WidgetRenderer = ({ item, isLoading, styles }) => {
-    const WidgetComponent = item.component;
-    return isLoading ? <SkeletonLoader height={item.height} styles={styles} /> : <WidgetComponent styles={styles} />;
-};
-
-// --- ADD WIDGET MODAL ---
-const AddWidgetModal = ({ isVisible, onClose, onAddWidget, availableWidgets, theme, styles }) => {
-    return (
-        <Modal visible={isVisible} onRequestClose={onClose} transparent animationType="fade">
-            <View style={styles.modalBackdrop}>
-                <View style={[styles.colorModalContainer, { backgroundColor: theme.background }]}>
-                    <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Add a Widget</Text>
-                    <ScrollView style={{ width: '100%' }}>
-                        {availableWidgets.map(widget => {
-                            const icon = widget.icon(theme, theme.textPrimary);
-                            return (
-                                <TouchableOpacity key={widget.key} style={styles.addWidgetItem} onPress={() => onAddWidget(widget)}>
-                                    {icon}
-                                    <Text style={styles.addWidgetItemText}>{widget.title}</Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </ScrollView>
-                    <TouchableOpacity style={[styles.confirmButton, { backgroundColor: theme.primary }]} onPress={onClose}>
-                        <Text style={[styles.confirmButtonText, { color: tinycolor(theme.primary).isDark() ? theme.white : theme.textPrimary }]}>Done</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Modal>
-    );
-};
-
-
+// --- MAIN INDEX COMPONENT ---
 export default function Index() {
+  const { theme, setTheme } = useTheme();
   const router = useRouter();
   const { isLoading, habits, calendarEvents, mealPlan } = useWellaura();
   const [widgets, setWidgets] = useState<Widget[]>([]);
@@ -223,110 +212,25 @@ export default function Index() {
   const [isPickerVisible, setPickerVisible] = useState(false);
   const [isThemeEditorVisible, setThemeEditorVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<{ type: 'widget' | 'theme', key: string } | null>(null);
-  const [isSnapshotVisible, setSnapshotVisible] = useState(false);
+  const [isSnapshotModalVisible, setSnapshotModalVisible] = useState(false);
   const [isAddWidgetModalVisible, setAddWidgetModalVisible] = useState(false);
-  const [theme, setTheme] = useState(DEFAULT_COLORS);
 
   const styles = getDynamicStyles(theme);
 
-  useEffect(() => { const loadData = async () => { await loadTheme(); await loadWidgetsAndLayout(); }; loadData(); }, []);
-
-  const saveTheme = async (newTheme) => { try { await AsyncStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(newTheme)); } catch (e) { console.error("Failed to save theme.", e); } };
-  const loadTheme = async () => { try { const themeValue = await AsyncStorage.getItem(THEME_STORAGE_KEY); if (themeValue !== null) { setTheme(JSON.parse(themeValue)); } else { setTheme(DEFAULT_COLORS); } } catch(e) { console.error("Failed to load theme.", e); setTheme(DEFAULT_COLORS); } };
-  const loadWidgetsAndLayout = async () => { await loadWidgets(); await loadLayout(); };
+  useEffect(() => { const loadWidgetsAndLayout = async () => { try { const layoutValue = await AsyncStorage.getItem(LAYOUT_STORAGE_KEY); if (layoutValue !== null) { setNumColumns(JSON.parse(layoutValue)); } const jsonValue = await AsyncStorage.getItem(WIDGETS_STORAGE_KEY); const savedData = jsonValue ? JSON.parse(jsonValue) : null; if (Array.isArray(savedData) && savedData.length > 0) { const hydrated = savedData.map((saved: any) => { const template = WIDGETS_TEMPLATE.find(w => w.key === saved.key); return template ? { ...template, ...saved } : null; }).filter(Boolean); setWidgets(hydrated as Widget[]); } else { setWidgets(WIDGETS_TEMPLATE); } } catch (e) { console.error("Failed to load widgets and layout.", e); setWidgets(WIDGETS_TEMPLATE); } }; loadWidgetsAndLayout(); }, []);
+  const saveTheme = async (newTheme: any) => { try { await AsyncStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(newTheme)); } catch (e) { console.error("Failed to save theme.", e); } };
   const saveWidgets = async (newWidgets: Widget[]) => { try { const simplified = newWidgets.map(({ component, icon, ...rest }) => rest); await AsyncStorage.setItem(WIDGETS_STORAGE_KEY, JSON.stringify(simplified)); setWidgets(newWidgets); } catch (e) { console.error("Failed to save widgets.", e); } };
-  const loadWidgets = async () => { try { const jsonValue = await AsyncStorage.getItem(WIDGETS_STORAGE_KEY); const savedData = jsonValue ? JSON.parse(jsonValue) : null; if (Array.isArray(savedData) && savedData.length > 0) { const hydrated = savedData.map(saved => { const template = WIDGETS_TEMPLATE.find(w => w.key === saved.key); return template ? { ...template, ...saved } : null; }).filter(Boolean); setWidgets(hydrated as Widget[]); } else { setWidgets(WIDGETS_TEMPLATE); } } catch (e) { console.error("Failed to load widgets.", e); setWidgets(WIDGETS_TEMPLATE); } };
-  const loadLayout = async () => { try { const layoutValue = await AsyncStorage.getItem(LAYOUT_STORAGE_KEY); if (layoutValue !== null) { setNumColumns(JSON.parse(layoutValue)); } } catch(e) { console.error("Failed to load layout setting.", e); } };
   const updateWidgetProperty = (key: string, property: 'height' | 'color', value: any) => { const newWidgets = widgets.map(w => w.key === key ? { ...w, [property]: value } : w); saveWidgets(newWidgets); };
+  const deleteWidget = (keyToDelete: string) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); const newWidgets = widgets.filter(w => w.key !== keyToDelete); saveWidgets(newWidgets); };
+  const addWidget = (widgetToAdd: Widget) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); const newWidgets = [...widgets, widgetToAdd]; saveWidgets(newWidgets); setAddWidgetModalVisible(false); };
+  const availableWidgets = useMemo(() => { const displayedWidgetKeys = new Set(widgets.map(w => w.key)); return WIDGETS_TEMPLATE.filter(w => !displayedWidgetKeys.has(w.key)); }, [widgets]);
+  const handleSelectColorToEdit = (type: 'widget' | 'theme', key: string) => { setEditingItem({ type, key }); setThemeEditorVisible(false); setPickerVisible(true); };
+  const handleCloseColorPicker = () => { setPickerVisible(false); setEditingItem(null); if (editingItem?.type === 'theme') { setThemeEditorVisible(true); } };
+  const confirmColor = (newColor: string) => { if (editingItem) { if (editingItem.type === 'widget') { updateWidgetProperty(editingItem.key, 'color', newColor); } else if (editingItem.type === 'theme') { const newTheme = { ...theme, [editingItem.key]: newColor }; setTheme(newTheme); saveTheme(newTheme); } } handleCloseColorPicker(); };
+  const handleSelectPresetTheme = (colors: any) => { setTheme(colors); saveTheme(colors); const newWidgets = widgets.map(w => ({ ...w, color: undefined })); saveWidgets(newWidgets); };
+  const renderItem = ({ item, drag, isActive }: RenderItemParams<Widget>) => { const height = useSharedValue(item.height); const updateHeightInState = (newHeight: number) => { updateWidgetProperty(item.key, 'height', newHeight); }; const panGestureHandler = useAnimatedGestureHandler({ onStart: (_, ctx: any) => { ctx.startHeight = height.value; }, onActive: (e, ctx: any) => { height.value = Math.max(120, ctx.startHeight + e.translationY); }, onEnd: () => { runOnJS(updateHeightInState)(height.value); }, }); const animatedStyle = useAnimatedStyle(() => ({ height: height.value })); const itemSurfaceColor = item.color || theme.surface; const isItemSurfaceDark = tinycolor(itemSurfaceColor).isDark(); const itemTextColor = isItemSurfaceDark ? theme.white : theme.textPrimary; const itemIcon = item.icon(theme, itemTextColor); return ( <View style={[styles.widgetContainer, { width: numColumns === 2 ? "50%" : "100%" }]}><TouchableOpacity onLongPress={isEditMode ? drag : undefined} disabled={!isEditMode} activeOpacity={0.8}>{isEditMode && (<TouchableOpacity style={styles.deleteButton} onPress={() => deleteWidget(item.key)}><Text style={styles.deleteButtonText}>×</Text></TouchableOpacity>)}<Animated.View style={[styles.card, { backgroundColor: itemSurfaceColor, opacity: isActive ? 0.8 : 1 }, animatedStyle]}><View style={styles.cardHeader}><View style={styles.cardTitleContainer}>{itemIcon}<Text style={[styles.cardTitle, {color: itemTextColor}]}>{item.title}</Text></View>{isEditMode && (<TouchableOpacity style={[styles.editButton, {backgroundColor: tinycolor(itemTextColor).setAlpha(0.1).toRgbString()}]} onPress={() => handleSelectColorToEdit('widget', item.key)}><Feather name="edit-3" size={16} color={isItemSurfaceDark ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary} /></TouchableOpacity>)}</View><Link href={item.path as any} asChild disabled={isEditMode}><TouchableOpacity style={styles.linkArea} activeOpacity={0.8}><WidgetRenderer item={item} isLoading={isLoading} styles={styles} /></TouchableOpacity></Link>{isEditMode && (<PanGestureHandler onGestureEvent={panGestureHandler}><Animated.View style={styles.resizeHandle}><Ionicons name="resize" size={16} color={isItemSurfaceDark ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary} /></Animated.View></PanGestureHandler>)}</Animated.View></TouchableOpacity></View> ); };
   
-  const deleteWidget = (keyToDelete: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    const newWidgets = widgets.filter(w => w.key !== keyToDelete);
-    saveWidgets(newWidgets);
-  };
-
-  const addWidget = (widgetToAdd: Widget) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    const newWidgets = [...widgets, widgetToAdd];
-    saveWidgets(newWidgets);
-    setAddWidgetModalVisible(false);
-  };
-
-  const availableWidgets = useMemo(() => {
-    const displayedWidgetKeys = new Set(widgets.map(w => w.key));
-    return WIDGETS_TEMPLATE.filter(w => !displayedWidgetKeys.has(w.key));
-  }, [widgets]);
-
-  const handleSelectColorToEdit = (type: 'widget' | 'theme', key: string) => {
-    setEditingItem({ type, key });
-    setThemeEditorVisible(false);
-    setPickerVisible(true);
-  };
-
-  const handleCloseColorPicker = () => {
-    setPickerVisible(false);
-    setEditingItem(null);
-    if (editingItem?.type === 'theme') {
-        setThemeEditorVisible(true);
-    }
-  };
-
-  const confirmColor = (newColor: string) => {
-    if (editingItem) {
-        if (editingItem.type === 'widget') {
-            updateWidgetProperty(editingItem.key, 'color', newColor);
-        } else if (editingItem.type === 'theme') {
-            const newTheme = { ...theme, [editingItem.key]: newColor };
-            setTheme(newTheme);
-            saveTheme(newTheme);
-        }
-    }
-    handleCloseColorPicker();
-  };
-  
-  const handleSelectPresetTheme = (colors) => {
-    setTheme(colors);
-    saveTheme(colors);
-    const newWidgets = widgets.map(w => ({ ...w, color: undefined }));
-    saveWidgets(newWidgets);
-  };
-
-  const todaysData = useMemo(() => { const today = moment(); const dayOfWeek = today.format('dddd'); const todayEvents = calendarEvents.filter(e => moment(e.start).isSame(today, 'day') && e.type === 'event'); const todayHabits = habits.filter(h => h.type === 'daily_boolean'); const todayMeals = mealPlan[dayOfWeek] || { breakfast: {name: '', time: 'N/A'}, lunch: {name: '', time: 'N/A'}, dinner: {name: '', time: 'N/A'} }; return { todayEvents, todayHabits, todayMeals }; }, [calendarEvents, habits, mealPlan]);
-  
-  const renderItem = ({ item, drag, isActive }: RenderItemParams<Widget>) => {
-    const height = useSharedValue(item.height);
-    const updateHeightInState = (newHeight: number) => { updateWidgetProperty(item.key, 'height', newHeight); };
-    const panGestureHandler = useAnimatedGestureHandler({ onStart: (_, ctx: any) => { ctx.startHeight = height.value; }, onActive: (e, ctx: any) => { height.value = Math.max(120, ctx.startHeight + e.translationY); }, onEnd: () => { runOnJS(updateHeightInState)(height.value); }, });
-    const animatedStyle = useAnimatedStyle(() => ({ height: height.value }));
-    
-    const itemSurfaceColor = item.color || theme.surface;
-    const isItemSurfaceDark = tinycolor(itemSurfaceColor).isDark();
-    const itemTextColor = isItemSurfaceDark ? theme.white : theme.textPrimary;
-
-    const itemIcon = item.icon(theme, itemTextColor);
-
-    return (
-      <View style={[styles.widgetContainer, { width: numColumns === 2 ? "50%" : "100%" }]}>
-        <TouchableOpacity onLongPress={isEditMode ? drag : undefined} disabled={!isEditMode} activeOpacity={0.8}>
-          {isEditMode && (
-            <TouchableOpacity style={styles.deleteButton} onPress={() => deleteWidget(item.key)}>
-                <Text style={styles.deleteButtonText}>×</Text>
-            </TouchableOpacity>
-          )}
-          <Animated.View style={[styles.card, { backgroundColor: itemSurfaceColor, opacity: isActive ? 0.8 : 1 }, animatedStyle]}>
-              <View style={styles.cardHeader}>
-                <View style={styles.cardTitleContainer}>{itemIcon}<Text style={[styles.cardTitle, {color: itemTextColor}]}>{item.title}</Text></View>
-                {isEditMode && (<TouchableOpacity style={[styles.editButton, {backgroundColor: tinycolor(itemTextColor).setAlpha(0.1).toRgbString()}]} onPress={() => handleSelectColorToEdit('widget', item.key)}><Feather name="edit-3" size={16} color={isItemSurfaceDark ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary} /></TouchableOpacity>)}
-              </View>
-              <TouchableOpacity style={styles.linkArea} disabled={isEditMode} onPress={() => router.push(item.path)}>
-                <WidgetRenderer item={item} isLoading={isLoading} styles={styles} />
-              </TouchableOpacity>
-              {isEditMode && (<PanGestureHandler onGestureEvent={panGestureHandler}><Animated.View style={styles.resizeHandle}><Ionicons name="resize" size={16} color={isItemSurfaceDark ? tinycolor(theme.white).setAlpha(0.7).toRgbString() : theme.textSecondary} /></Animated.View></PanGestureHandler>)}
-          </Animated.View>
-        </TouchableOpacity>
-      </View>
-    );
-  };
+  if (!theme) { return <SafeAreaView style={{flex: 1, backgroundColor: '#E4ECEA'}} /> }
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -343,7 +247,7 @@ export default function Index() {
                 </View>
                 <View style={styles.headerActions}>
                   {!isEditMode && (
-                    <TouchableOpacity style={styles.todayButton} onPress={() => setSnapshotVisible(true)}>
+                    <TouchableOpacity style={styles.todayButton} onPress={() => setSnapshotModalVisible(true)}>
                       <Ionicons name="sparkles-outline" size={22} color={tinycolor(theme.surface).isDark() ? theme.white : theme.primary} />
                     </TouchableOpacity>
                   )}
@@ -372,8 +276,8 @@ export default function Index() {
           ListFooterComponent={ <View style={{ height: 40 }} /> }
         />
       </View>
-      <Modal visible={isSnapshotVisible} transparent={true} animationType="fade" onRequestClose={() => setSnapshotVisible(false)}>
-        <TodaySnapshot onClose={() => setSnapshotVisible(false)} theme={theme} />
+      <Modal visible={isSnapshotModalVisible} transparent={true} animationType="fade" onRequestClose={() => setSnapshotModalVisible(false)}>
+        <TodaySnapshotModal onClose={() => setSnapshotModalVisible(false)} />
       </Modal>
       <ColorPickerModal 
         isVisible={isPickerVisible}

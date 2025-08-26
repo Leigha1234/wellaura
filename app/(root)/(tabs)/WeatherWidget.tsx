@@ -107,7 +107,7 @@ export const WeatherWidget = ({ theme }) => {
 
             if (mainWeather === 'clear' || mainWeather === 'clouds') {
                 if (walkHabit) {
-                    setSuggestion({ text: `It's a great day for your "${walkHabit.name}" habit!`, path: '/(root)/(tabs)/habit-tracker-page' });
+                    setSuggestion({ text: `It's a great day for your "${walkHabit.name}" habit!`, path: '/(root)/(tabs)/habit-tracker' });
                 } else {
                     setSuggestion({ text: "Enjoy the nice weather with a mindful moment outside.", path: '/(root)/(tabs)/mindfulness-page' });
                 }

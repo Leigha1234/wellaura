@@ -1,20 +1,22 @@
 // app/_layout.tsx
 
 import { Stack } from 'expo-router';
-import { GestureHandlerRootView } from 'react-native-gesture-handler'; // 1. Import this
-import { WellauraProvider } from './WellauraContext';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { CycleProvider } from './context/CycleContext'; // 1. Import CycleProvider
 import { ThemeProvider } from './context/ThemeContext';
-// ... other imports
+import { WellauraProvider } from './WellauraContext';
 
 export default function RootLayout() {
   return (
-    // 2. Wrap everything with GestureHandlerRootView
     <GestureHandlerRootView style={{ flex: 1 }}> 
       <ThemeProvider>
         <WellauraProvider>
-          <Stack>
-            <Stack.Screen name="(root)" options={{ headerShown: false }} />
-          </Stack>
+          {/* 2. Wrap your Stack with CycleProvider */}
+          <CycleProvider> 
+            <Stack>
+              <Stack.Screen name="(root)" options={{ headerShown: false }} />
+            </Stack>
+          </CycleProvider>
         </WellauraProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
