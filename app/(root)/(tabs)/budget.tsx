@@ -1,21 +1,25 @@
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
-import moment from "moment"; // <-- This was the missing import
+import moment from "moment";
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Animated, // <-- Import Animated
     Keyboard,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
     StyleSheet,
-    Text, TextInput,
+    Text,
+    TextInput,
     TouchableOpacity,
     TouchableWithoutFeedback,
     View
 } from 'react-native';
+// --- Add Gesture Handler imports ---
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import tinycolor from "tinycolor2";
 
 import { useTheme } from '../../../app/context/ThemeContext';
@@ -89,6 +93,26 @@ export default function BudgetPage() {
     const { totalIncome, totalExpenses } = useMemo(() => { const income = budgetSettings.incomeVaries ? thisPeriodTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.actualAmount ?? t.budgetedAmount), 0) : parseFloat(budgetSettings.fixedIncome || '0') || 0; const expenses = thisPeriodTransactions.filter(t => t.type === 'expense').reduce((sum, t) => { if (t.actualAmount !== null) return sum + t.actualAmount; if (!t.isVariable) return sum + t.budgetedAmount; return sum; }, 0); return { totalIncome: income, totalExpenses: expenses }; }, [thisPeriodTransactions, budgetSettings]);
     const handleAddTransaction = useCallback(() => { if (!category) { Alert.alert("No Category", "Please select a category."); return; } const parsedAmount = parseFloat(amount); if (isNaN(parsedAmount) || parsedAmount <= 0) { Alert.alert("Invalid Amount", "Please enter a valid positive amount."); return; } const newTransaction: Transaction = { id: Date.now().toString(), type: transactionType, category, date: new Date().toISOString(), isVariable: transactionType === 'expense' && isVariableExpense, budgetedAmount: parsedAmount, actualAmount: (transactionType === 'expense' && isVariableExpense) ? null : parsedAmount, }; const newTransactions = [...transactions, newTransaction].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); saveTransactions(newTransactions); setCategory(''); setAmount(''); setIsVariableExpense(false); Keyboard.dismiss(); }, [category, amount, transactionType, transactions, isVariableExpense, saveTransactions]);
     const handleUpdateActualAmount = (transactionId: string) => { Alert.prompt("Actual Spending", "Enter the final amount for this expense.", [{ text: "Cancel", style: "cancel" }, { text: "Save", onPress: (newAmount) => { if (newAmount && !isNaN(parseFloat(newAmount))) { const updatedTransactions = transactions.map(t => t.id === transactionId ? { ...t, actualAmount: parseFloat(newAmount) } : t); saveTransactions(updatedTransactions); } else { Alert.alert("Invalid", "Please enter a valid number."); } }}], 'plain-text', '', 'number-pad' ); };
+    
+    // --- NEW: Function to handle deleting a transaction ---
+    const handleDeleteTransaction = useCallback((transactionId: string) => {
+        Alert.alert(
+            "Delete Transaction",
+            "Are you sure you want to permanently delete this transaction?",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () => {
+                        const updatedTransactions = transactions.filter(t => t.id !== transactionId);
+                        saveTransactions(updatedTransactions);
+                    }
+                }
+            ]
+        );
+    }, [transactions, saveTransactions]);
+
     const handleUpdateSettings = (newSettings: BudgetSettings) => {
         const scheduledPayments = newSettings.scheduledPayments || [];
         let updatedCalendarEvents = calendarEvents.filter(e => e.type !== 'payment');
@@ -99,27 +123,104 @@ export default function BudgetPage() {
 
     if (isLoading) return <View style={styles.loadingContainer}><ActivityIndicator size="large" color={theme.primary} /></View>;
 
+    // --- NEW: Wrap the entire screen in GestureHandlerRootView ---
     return (
-        <KeyboardAvoidingView style={{ flex: 1, backgroundColor: theme.background }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-            <View style={{flex: 1}}>
-                <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-                    <View style={styles.header}><View style={styles.iconButton} /><Text style={styles.headerTitle}>My Budget</Text><TouchableOpacity style={styles.iconButton} onPress={() => setSettingsVisible(true)}><Ionicons name="settings-outline" size={24} color={theme.textPrimary} /></TouchableOpacity></View>
-                    <LinearGradient colors={[theme.primary, tinycolor(theme.primary).darken(15).toString()]} start={{x: 0, y: 0}} end={{x: 1, y: 1}} style={[styles.card, { marginBottom: 25 }]}><Text style={[styles.cardTitle, { color: styles.summaryLabel.color, opacity: 0.9 }]}>{budgetSettings.budgetPeriod} Summary</Text><View style={styles.summaryGrid}><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Income</Text><Text style={styles.summaryValue}>£{totalIncome.toFixed(2)}</Text></View><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Expenses</Text><Text style={styles.summaryValue}>£{totalExpenses.toFixed(2)}</Text></View><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Net</Text><Text style={styles.summaryValue}>£{(totalIncome - totalExpenses).toFixed(2)}</Text></View></View></LinearGradient>
-                    <TouchableOpacity style={[styles.card, styles.linkCard]} onPress={() => setSpendingVisible(true)}><Ionicons name="bar-chart-outline" size={22} color={theme.primary} /><Text style={styles.linkCardText}>Track Spending Details</Text><Ionicons name="chevron-forward-outline" size={22} color={theme.textSecondary} /></TouchableOpacity>
-                    <View style={styles.card}><Text style={styles.cardTitle}>New Transaction</Text>{budgetSettings.incomeVaries && (<View style={styles.typeSelector}><TouchableOpacity style={[styles.typeButton, transactionType === 'expense' && styles.typeButtonActive]} onPress={() => setTransactionType('expense')}><Text style={[styles.typeButtonText, transactionType === 'expense' && styles.typeButtonTextActive]}>Expense</Text></TouchableOpacity><TouchableOpacity style={[styles.typeButton, transactionType === 'income' && styles.typeButtonActive]} onPress={() => setTransactionType('income')}><Text style={[styles.typeButtonText, transactionType === 'income' && styles.typeButtonTextActive]}>Income</Text></TouchableOpacity></View>)}<Text style={styles.inputLabel}>Category</Text><View style={styles.categorySelectorContainer}><ScrollView horizontal showsHorizontalScrollIndicator={false}>{activeCategories.map(cat => (<TouchableOpacity key={cat} style={[styles.categoryButton, category === cat && styles.categoryButtonActive]} onPress={() => setCategory(cat)}><Text style={[styles.categoryButtonText, category === cat && styles.categoryButtonTextActive]}>{cat}</Text></TouchableOpacity>))}<TouchableOpacity style={styles.addCategoryButton} onPress={() => setSettingsVisible(true)}><Ionicons name="add" size={18} color={theme.primary} /><Text style={styles.addCategoryButtonText}>Add New</Text></TouchableOpacity></ScrollView></View><Text style={styles.inputLabel}>Amount</Text><TextInput style={[styles.input, {flex: 0}]} placeholder="£0.00" keyboardType="numeric" value={amount} onChangeText={setAmount} />
-                    {transactionType === 'expense' && <TouchableOpacity style={styles.checkboxRow} onPress={() => setIsVariableExpense(!isVariableExpense)}><Ionicons name={isVariableExpense ? "checkbox" : "square-outline"} size={24} color={theme.primary} /><Text style={styles.checkboxLabel}>This is a budget estimate</Text></TouchableOpacity>}
-                    <TouchableOpacity style={styles.addButton} onPress={handleAddTransaction}><Ionicons name="add" size={24} color={styles.addButtonText.color} /><Text style={styles.addButtonText}>Add Transaction</Text></TouchableOpacity></View>
-                    <TransactionHistory transactions={thisPeriodTransactions} onUpdateActual={handleUpdateActualAmount} theme={theme} styles={styles}/>
-                </ScrollView>
-                {isSettingsVisible && <SettingsPopup settings={budgetSettings} onClose={() => setSettingsVisible(false)} onUpdate={handleUpdateSettings} theme={theme} styles={styles} />}
-                {isSpendingVisible && <SpendingTrackerPopup visible={isSpendingVisible} onClose={() => setSpendingVisible(false)} transactions={transactions} settings={budgetSettings} theme={theme} styles={styles} />}
-            </View>
-        </KeyboardAvoidingView>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+            <KeyboardAvoidingView style={{ flex: 1, backgroundColor: theme.background }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+                <View style={{flex: 1}}>
+                    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+                        <View style={styles.header}><View style={styles.iconButton} /><Text style={styles.headerTitle}>My Budget</Text><TouchableOpacity style={styles.iconButton} onPress={() => setSettingsVisible(true)}><Ionicons name="settings-outline" size={24} color={theme.textPrimary} /></TouchableOpacity></View>
+                        <LinearGradient colors={[theme.primary, tinycolor(theme.primary).darken(15).toString()]} start={{x: 0, y: 0}} end={{x: 1, y: 1}} style={[styles.card, { marginBottom: 25 }]}><Text style={[styles.cardTitle, { color: styles.summaryLabel.color, opacity: 0.9 }]}>{budgetSettings.budgetPeriod} Summary</Text><View style={styles.summaryGrid}><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Income</Text><Text style={styles.summaryValue}>£{totalIncome.toFixed(2)}</Text></View><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Expenses</Text><Text style={styles.summaryValue}>£{totalExpenses.toFixed(2)}</Text></View><View style={styles.summaryItem}><Text style={styles.summaryLabel}>Net</Text><Text style={styles.summaryValue}>£{(totalIncome - totalExpenses).toFixed(2)}</Text></View></View></LinearGradient>
+                        <TouchableOpacity style={[styles.card, styles.linkCard]} onPress={() => setSpendingVisible(true)}><Ionicons name="bar-chart-outline" size={22} color={theme.primary} /><Text style={styles.linkCardText}>Track Spending Details</Text><Ionicons name="chevron-forward-outline" size={22} color={theme.textSecondary} /></TouchableOpacity>
+                        <View style={styles.card}><Text style={styles.cardTitle}>New Transaction</Text>{budgetSettings.incomeVaries && (<View style={styles.typeSelector}><TouchableOpacity style={[styles.typeButton, transactionType === 'expense' && styles.typeButtonActive]} onPress={() => setTransactionType('expense')}><Text style={[styles.typeButtonText, transactionType === 'expense' && styles.typeButtonTextActive]}>Expense</Text></TouchableOpacity><TouchableOpacity style={[styles.typeButton, transactionType === 'income' && styles.typeButtonActive]} onPress={() => setTransactionType('income')}><Text style={[styles.typeButtonText, transactionType === 'income' && styles.typeButtonTextActive]}>Income</Text></TouchableOpacity></View>)}<Text style={styles.inputLabel}>Category</Text><View style={styles.categorySelectorContainer}><ScrollView horizontal showsHorizontalScrollIndicator={false}>{activeCategories.map(cat => (<TouchableOpacity key={cat} style={[styles.categoryButton, category === cat && styles.categoryButtonActive]} onPress={() => setCategory(cat)}><Text style={[styles.categoryButtonText, category === cat && styles.categoryButtonTextActive]}>{cat}</Text></TouchableOpacity>))}<TouchableOpacity style={styles.addCategoryButton} onPress={() => setSettingsVisible(true)}><Ionicons name="add" size={18} color={theme.primary} /><Text style={styles.addCategoryButtonText}>Add New</Text></TouchableOpacity></ScrollView></View><Text style={styles.inputLabel}>Amount</Text><TextInput style={[styles.input, {flex: 0}]} placeholder="£0.00" keyboardType="numeric" value={amount} onChangeText={setAmount} />
+                        {transactionType === 'expense' && <TouchableOpacity style={styles.checkboxRow} onPress={() => setIsVariableExpense(!isVariableExpense)}><Ionicons name={isVariableExpense ? "checkbox" : "square-outline"} size={24} color={theme.primary} /><Text style={styles.checkboxLabel}>This is a budget estimate</Text></TouchableOpacity>}
+                        <TouchableOpacity style={styles.addButton} onPress={handleAddTransaction}><Ionicons name="add" size={24} color={styles.addButtonText.color} /><Text style={styles.addButtonText}>Add Transaction</Text></TouchableOpacity></View>
+                        {/* --- NEW: Pass the delete handler to the history component --- */}
+                        <TransactionHistory 
+                            transactions={thisPeriodTransactions} 
+                            onUpdateActual={handleUpdateActualAmount} 
+                            onDelete={handleDeleteTransaction}
+                            theme={theme} 
+                            styles={styles}
+                        />
+                    </ScrollView>
+                    {isSettingsVisible && <SettingsPopup settings={budgetSettings} onClose={() => setSettingsVisible(false)} onUpdate={handleUpdateSettings} theme={theme} styles={styles} />}
+                    {isSpendingVisible && <SpendingTrackerPopup visible={isSpendingVisible} onClose={() => setSpendingVisible(false)} transactions={transactions} settings={budgetSettings} theme={theme} styles={styles} />}
+                </View>
+            </KeyboardAvoidingView>
+        </GestureHandlerRootView>
     );
 }
 
 // --- Sub-Components ---
-function TransactionHistory({ transactions, onUpdateActual, theme, styles }) { const [filter, setFilter] = useState<HistoryFilter>('All'); const filterOptions = useMemo(() => { const expenseCategories = new Set(transactions.filter(t => t.type === 'expense').map(t => t.category)); return ['All', 'Income', 'Expense', ...Array.from(expenseCategories)]; }, [transactions]); const filteredTransactions = useMemo(() => { if (filter === 'All') return transactions; if (filter === 'Income') return transactions.filter(t => t.type === 'income'); if (filter === 'Expense') return transactions.filter(t => t.type === 'expense'); return transactions.filter(t => t.category === filter); }, [transactions, filter]); if (transactions.length === 0) { return ( <View style={styles.card}><Text style={styles.cardTitle}>Transaction History</Text><View style={styles.emptyHistoryContainer}><Ionicons name="receipt-outline" size={48} color={theme.textSecondary} /><Text style={styles.emptyText}>No transactions for this period yet.</Text><Text style={styles.emptySubText}>Add one above to get started!</Text></View></View> ); } return ( <View style={styles.card}><Text style={styles.cardTitle}>Transaction History</Text><View style={{ marginBottom: 15 }}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 5 }}>{filterOptions.map(option => ( <TouchableOpacity key={option} style={[styles.filterButton, filter === option && styles.filterButtonActive]} onPress={() => setFilter(option)}><Text style={[styles.filterButtonText, filter === option && styles.filterButtonTextActive]}>{option}</Text></TouchableOpacity> ))}</ScrollView></View>{filteredTransactions.length > 0 ? filteredTransactions.map(t => ( <View key={t.id} style={styles.transactionRow}><View style={{flex: 1, flexDirection: 'row', alignItems: 'center'}}><View style={[styles.categoryIcon, { backgroundColor: CATEGORY_COLORS[t.category] || CATEGORY_COLORS.Other }]} /><View><Text style={styles.transactionCategory}>{t.category}</Text><View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>{t.isScheduled && <Ionicons name="calendar-outline" size={12} color={theme.textSecondary} />}<Text style={styles.transactionDate}>{new Date(t.date).toLocaleDateString()}</Text></View>{t.isVariable && t.actualAmount !== null && ( <Text style={[styles.budgetedText, {color: t.actualAmount <= t.budgetedAmount ? '#28A745' : '#E53E3E'}]}> (Budgeted: £{t.budgetedAmount.toFixed(2)}) </Text> )}</View></View><View style={{alignItems: 'flex-end'}}>{t.isVariable && t.actualAmount === null ? ( <TouchableOpacity style={styles.addActualButton} onPress={() => onUpdateActual(t.id)}><Text style={styles.addActualButtonText}>Log Actual</Text></TouchableOpacity> ) : ( <Text style={[styles.transactionAmount, { color: t.type === 'income' ? '#28A745' : theme.textPrimary }]}> {t.type === 'income' ? '+' : '-'}£{(t.actualAmount ?? t.budgetedAmount).toFixed(2)} </Text> )}</View></View> )) : <Text style={styles.emptyText}>No transactions match this filter.</Text>}</View> );}
+// --- NEW: Update TransactionHistory to handle swipe-to-delete ---
+function TransactionHistory({ transactions, onUpdateActual, onDelete, theme, styles }) { 
+    const [filter, setFilter] = useState<HistoryFilter>('All'); 
+    const filterOptions = useMemo(() => { const expenseCategories = new Set(transactions.filter(t => t.type === 'expense').map(t => t.category)); return ['All', 'Income', 'Expense', ...Array.from(expenseCategories)]; }, [transactions]); 
+    const filteredTransactions = useMemo(() => { if (filter === 'All') return transactions; if (filter === 'Income') return transactions.filter(t => t.type === 'income'); if (filter === 'Expense') return transactions.filter(t => t.type === 'expense'); return transactions.filter(t => t.category === filter); }, [transactions, filter]); 
+
+    // --- NEW: Function to render the delete action view ---
+    const renderRightActions = (progress, transactionId) => {
+        const scale = progress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.7, 1],
+            extrapolate: 'clamp',
+        });
+        return (
+            <TouchableOpacity onPress={() => onDelete(transactionId)} style={styles.deleteAction}>
+                <Animated.View style={{ transform: [{ scale }] }}>
+                    <Ionicons name="trash-outline" size={24} color="#FFF" />
+                </Animated.View>
+            </TouchableOpacity>
+        );
+    };
+
+    if (transactions.length === 0) { 
+        return ( <View style={styles.card}><Text style={styles.cardTitle}>Transaction History</Text><View style={styles.emptyHistoryContainer}><Ionicons name="receipt-outline" size={48} color={theme.textSecondary} /><Text style={styles.emptyText}>No transactions for this period yet.</Text><Text style={styles.emptySubText}>Add one above to get started!</Text></View></View> ); 
+    } 
+    return ( 
+        <View style={styles.card}>
+            <Text style={styles.cardTitle}>Transaction History</Text>
+            <View style={{ marginBottom: 15 }}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 5 }}>{filterOptions.map(option => ( <TouchableOpacity key={option} style={[styles.filterButton, filter === option && styles.filterButtonActive]} onPress={() => setFilter(option)}><Text style={[styles.filterButtonText, filter === option && styles.filterButtonTextActive]}>{option}</Text></TouchableOpacity> ))}</ScrollView></View>
+            {filteredTransactions.length > 0 ? filteredTransactions.map(t => ( 
+                // --- NEW: Wrap each transaction row in a Swipeable component ---
+                <Swipeable
+                    key={t.id}
+                    renderRightActions={(progress) => renderRightActions(progress, t.id)}
+                    overshootRight={false}
+                >
+                    <View style={styles.transactionRow}>
+                        <View style={{flex: 1, flexDirection: 'row', alignItems: 'center'}}>
+                            <View style={[styles.categoryIcon, { backgroundColor: CATEGORY_COLORS[t.category] || CATEGORY_COLORS.Other }]} />
+                            <View>
+                                <Text style={styles.transactionCategory}>{t.category}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                                    {t.isScheduled && <Ionicons name="calendar-outline" size={12} color={theme.textSecondary} />}
+                                    <Text style={styles.transactionDate}>{new Date(t.date).toLocaleDateString()}</Text>
+                                </View>
+                                {t.isVariable && t.actualAmount !== null && ( 
+                                    <Text style={[styles.budgetedText, {color: t.actualAmount <= t.budgetedAmount ? '#28A745' : '#E53E3E'}]}> (Budgeted: £{t.budgetedAmount.toFixed(2)}) </Text> 
+                                )}
+                            </View>
+                        </View>
+                        <View style={{alignItems: 'flex-end'}}>
+                            {t.isVariable && t.actualAmount === null ? ( 
+                                <TouchableOpacity style={styles.addActualButton} onPress={() => onUpdateActual(t.id)}>
+                                    <Text style={styles.addActualButtonText}>Log Actual</Text>
+                                </TouchableOpacity> 
+                            ) : ( 
+                                <Text style={[styles.transactionAmount, { color: t.type === 'income' ? '#28A745' : theme.textPrimary }]}> 
+                                    {t.type === 'income' ? '+' : '-'}£{(t.actualAmount ?? t.budgetedAmount).toFixed(2)} 
+                                </Text> 
+                            )}
+                        </View>
+                    </View>
+                </Swipeable>
+            )) : <Text style={styles.emptyText}>No transactions match this filter.</Text>}
+        </View> 
+    );
+}
+
 function SpendingTrackerPopup({ onClose, transactions, settings, theme, styles }) { const dataForView = useMemo(() => { const now = new Date(); switch (settings.budgetPeriod) { case 'Weekly': return transactions.filter(t => new Date(t.date) >= getStartOfWeek(now)); case 'Fortnightly': return transactions.filter(t => new Date(t.date).getFullYear() === now.getFullYear() && getFortnightOfYear(new Date(t.date)) === getFortnightOfYear(now)); default: return transactions.filter(t => new Date(t.date).getMonth() === now.getMonth() && new Date(t.date).getFullYear() === now.getFullYear()); } }, [transactions, settings.budgetPeriod]); const expenseBreakdownData = useMemo(() => { const expenses = dataForView.filter(t => t.type === 'expense' && (t.actualAmount !== null && t.actualAmount > 0)); const totalExpenses = expenses.reduce((sum, t) => sum + (t.actualAmount || 0), 0); if (totalExpenses === 0) return []; const categoryTotals = expenses.reduce((acc: Record<string, number>, { category, actualAmount }) => { acc[category] = (acc[category] || 0) + (actualAmount || 0); return acc; }, {}); return Object.entries(categoryTotals).map(([cat, amt]) => ({ category: cat, amount: amt, color: CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other, percentage: amt / totalExpenses })).sort((a, b) => b.amount - a.amount); }, [dataForView]); return ( <TouchableWithoutFeedback onPress={onClose}><View style={styles.modalBackdrop}><TouchableWithoutFeedback onPress={e => e.stopPropagation()}><View style={styles.modalContent}><View style={styles.modalHeader}><Text style={styles.modalTitle}>Spending Tracker</Text><TouchableOpacity onPress={onClose}><Ionicons name="close-circle" size={30} color={theme.primary} /></TouchableOpacity></View><ScrollView><View style={styles.settingCard}><Text style={styles.cardTitle}>{settings.budgetPeriod} Finalised Expenses</Text>{expenseBreakdownData.length > 0 ? expenseBreakdownData.map(item => (<View key={item.category} style={styles.barChartRow}><View style={styles.barLabelContainer}><Text style={styles.barLabel} numberOfLines={1}>{item.category}</Text><Text style={styles.barAmount}>£{item.amount.toFixed(2)}</Text></View><View style={styles.barContainer}><View style={[styles.bar, { width: `${item.percentage * 100}%`, backgroundColor: item.color }]} /></View></View>)) : <Text style={styles.emptyText}>No finalized expenses for this period.</Text>}</View></ScrollView></View></TouchableWithoutFeedback></View></TouchableWithoutFeedback> );}
 
 function SettingsPopup({ settings, onClose, onUpdate, theme, styles }) {
@@ -217,7 +318,7 @@ const getDynamicStyles = (theme) => {
         categoryManageText: { fontSize: 16, color: theme.textPrimary },
         saveButton: { backgroundColor: theme.primary, padding: 16, alignItems: 'center', justifyContent: 'center', borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
         saveButtonText: { color: onPrimaryColor, fontSize: 18, fontWeight: 'bold' },
-        transactionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.border },
+        transactionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.border, backgroundColor: theme.surface, paddingHorizontal: 16 /* Add padding to match card */ },
         transactionCategory: { fontSize: 16, fontWeight: '600', color: theme.textPrimary },
         transactionDate: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
         transactionAmount: { fontSize: 16, fontWeight: '700' },
@@ -231,5 +332,11 @@ const getDynamicStyles = (theme) => {
         categoryIcon: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
         dateContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: theme.border, padding: 15, borderRadius: 10 },
         dateText: { fontSize: 16, color: theme.textPrimary, fontWeight: '500' },
+        deleteAction: {
+            backgroundColor: '#E53E3E',
+            justifyContent: 'center',
+            alignItems: 'center',
+            width: 80,
+        },
     });
 };
